@@ -20,6 +20,7 @@
 package inotifyinformer
 
 import (
+	"io/ioutil"
 	"os"
 	"path/filepath"
 
@@ -68,7 +69,7 @@ var _ = Describe("Inotify", func() {
 		BeforeEach(func() {
 			var err error
 			stopInformer = make(chan struct{})
-			tmpDir, err = os.MkdirTemp("", "kubevirt")
+			tmpDir, err = ioutil.TempDir("", "kubevirt")
 			Expect(err).ToNot(HaveOccurred())
 
 			// create two files

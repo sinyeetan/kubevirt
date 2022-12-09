@@ -31,7 +31,6 @@ import (
 	"kubevirt.io/client-go/precond"
 
 	diskutils "kubevirt.io/kubevirt/pkg/ephemeral-disk-utils"
-	"kubevirt.io/kubevirt/pkg/util"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/api"
 )
 
@@ -69,15 +68,18 @@ func WatchdogFileRemove(baseDir string, vmi *v1.VirtualMachineInstance) error {
 	return diskutils.RemoveFilesIfExist(file)
 }
 
-func WatchdogFileUpdate(watchdogFile string, uid string) (err error) {
+func WatchdogFileUpdate(watchdogFile string, uid string) error {
 	f, err := os.Create(watchdogFile)
 	if err != nil {
 		return err
 	}
-	defer util.CloseIOAndCheckErr(f, &err)
-
 	_, err = f.WriteString(uid)
-	return err
+	if err != nil {
+		return err
+	}
+	f.Close()
+
+	return nil
 }
 
 func WatchdogFileExists(baseDir string, vmi *v1.VirtualMachineInstance) (bool, error) {

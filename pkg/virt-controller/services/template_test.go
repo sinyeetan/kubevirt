@@ -24,10 +24,7 @@ import (
 	"strconv"
 	"strings"
 
-	"kubevirt.io/kubevirt/pkg/virt-controller/watch/topology"
-
 	"k8s.io/apimachinery/pkg/util/validation"
-	"k8s.io/utils/pointer"
 
 	"kubevirt.io/client-go/api"
 
@@ -53,7 +50,6 @@ import (
 
 	"kubevirt.io/kubevirt/pkg/hooks"
 	"kubevirt.io/kubevirt/pkg/network/istio"
-	storagetypes "kubevirt.io/kubevirt/pkg/storage/types"
 	"kubevirt.io/kubevirt/pkg/testutils"
 	"kubevirt.io/kubevirt/pkg/util"
 	virtconfig "kubevirt.io/kubevirt/pkg/virt-config"
@@ -112,7 +108,7 @@ var _ = Describe("Template", func() {
 				"/var/lib/kubevirt",
 				"/var/run/kubevirt-ephemeral-disks",
 				"/var/run/kubevirt/container-disks",
-				v1.HotplugDiskDir,
+				"/var/run/kubevirt/hotplug-disks",
 				"pull-secret-1",
 				pvcCache,
 				virtClient,
@@ -428,7 +424,7 @@ var _ = Describe("Template", func() {
 			)
 		})
 		Context("with SELinux types", func() {
-			It("should be nil if no SELinux type is specified and none is needed", func() {
+			It("should run under the SELinux type virt_launcher.process if none specified", func() {
 				config, kvInformer, svc = configFactory(defaultArch)
 				vmi := v1.VirtualMachineInstance{
 					ObjectMeta: metav1.ObjectMeta{
@@ -443,7 +439,8 @@ var _ = Describe("Template", func() {
 				pod, err := svc.RenderLaunchManifest(&vmi)
 				Expect(err).ToNot(HaveOccurred())
 				if pod.Spec.SecurityContext != nil {
-					Expect(pod.Spec.SecurityContext.SELinuxOptions).To(BeNil())
+					Expect(pod.Spec.SecurityContext.SELinuxOptions).ToNot(BeNil())
+					Expect(pod.Spec.SecurityContext.SELinuxOptions.Type).To(Equal("virt_launcher.process"))
 				}
 			})
 			It("should run under the corresponding SELinux type if specified", func() {
@@ -468,15 +465,10 @@ var _ = Describe("Template", func() {
 				Expect(pod.Spec.SecurityContext.SELinuxOptions).ToNot(BeNil())
 				Expect(pod.Spec.SecurityContext.SELinuxOptions.Type).To(Equal("spc_t"))
 			})
-			DescribeTable("should have an SELinux level of", func(enableWorkaround bool) {
+			It("should have a level of s0 on all but compute if a type is specified", func() {
 				config, kvInformer, svc = configFactory(defaultArch)
 				kvConfig := kv.DeepCopy()
 				kvConfig.Spec.Configuration.SELinuxLauncherType = "spc_t"
-				if enableWorkaround {
-					kvConfig.Spec.Configuration.DeveloperConfiguration.FeatureGates =
-						append(kvConfig.Spec.Configuration.DeveloperConfiguration.FeatureGates,
-							virtconfig.DockerSELinuxMCSWorkaround)
-				}
 				testutils.UpdateFakeKubeVirtClusterConfig(kvInformer, kvConfig)
 
 				volumes := []v1.Volume{
@@ -521,19 +513,10 @@ var _ = Describe("Template", func() {
 				Expect(err).ToNot(HaveOccurred())
 				for _, c := range pod.Spec.Containers {
 					if c.Name != "compute" {
-						if enableWorkaround {
-							Expect(c.SecurityContext.SELinuxOptions.Level).To(Equal("s0"), "failed on "+c.Name)
-						} else {
-							if c.SecurityContext != nil && c.SecurityContext.SELinuxOptions != nil {
-								Expect(c.SecurityContext.SELinuxOptions.Level).To(BeEmpty(), "failed on "+c.Name)
-							}
-						}
+						Expect(c.SecurityContext.SELinuxOptions.Level).To(Equal("s0"))
 					}
 				}
-			},
-				Entry(`nothing on all virt-launcher containers`, false),
-				Entry(`"s0" on all but compute if the docker workaround is enabled`, true),
-			)
+			})
 		})
 		DescribeTable("should check if proper environment variable is ",
 			func(debugLogsAnnotationValue string, exceptedValues []string) {
@@ -1086,7 +1069,7 @@ var _ = Describe("Template", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 			It("should mount default serviceAccountToken", func() {
-				Expect(*pod.Spec.AutomountServiceAccountToken).To(BeTrue())
+				Expect(*pod.Spec.AutomountServiceAccountToken).To(Equal(true))
 			})
 		})
 		Context("with node selectors", func() {
@@ -1292,9 +1275,11 @@ var _ = Describe("Template", func() {
 				Expect(pod.Spec.NodeSelector).To(Not(HaveKey(ContainSubstring(v1.CPUModelVendorLabel))))
 			})
 
-			DescribeTable("should add node selector for hyperv nodes if VMI requests hyperv features which depend on host kernel", func(EVMCSEnabled bool) {
+			It("should add node selector for hyperv nodes if VMI requests hyperv features which depend on host kernel", func() {
 				config, kvInformer, svc = configFactory(defaultArch)
 				enableFeatureGate(virtconfig.HypervStrictCheckGate)
+
+				enabled := true
 				vmi := v1.VirtualMachineInstance{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "testvmi",
@@ -1309,19 +1294,19 @@ var _ = Describe("Template", func() {
 							Features: &v1.Features{
 								Hyperv: &v1.FeatureHyperv{
 									SyNIC: &v1.FeatureState{
-										Enabled: pointer.BoolPtr(true),
+										Enabled: &enabled,
 									},
 									SyNICTimer: &v1.SyNICTimer{
-										Enabled: pointer.BoolPtr(true),
+										Enabled: &enabled,
 									},
 									Frequencies: &v1.FeatureState{
-										Enabled: pointer.BoolPtr(true),
+										Enabled: &enabled,
 									},
 									IPI: &v1.FeatureState{
-										Enabled: pointer.BoolPtr(true),
+										Enabled: &enabled,
 									},
 									EVMCS: &v1.FeatureState{
-										Enabled: pointer.BoolPtr(EVMCSEnabled),
+										Enabled: &enabled,
 									},
 								},
 							},
@@ -1336,16 +1321,8 @@ var _ = Describe("Template", func() {
 				Expect(pod.Spec.NodeSelector).Should(HaveKeyWithValue(NFD_KVM_INFO_PREFIX+"synictimer", "true"))
 				Expect(pod.Spec.NodeSelector).Should(HaveKeyWithValue(NFD_KVM_INFO_PREFIX+"frequencies", "true"))
 				Expect(pod.Spec.NodeSelector).Should(HaveKeyWithValue(NFD_KVM_INFO_PREFIX+"ipi", "true"))
-				if EVMCSEnabled {
-					Expect(pod.Spec.NodeSelector).Should(HaveKeyWithValue(v1.CPUModelVendorLabel+IntelVendorName, "true"))
-				} else {
-					Expect(pod.Spec.NodeSelector).ShouldNot(HaveKeyWithValue(v1.CPUModelVendorLabel+IntelVendorName, "true"))
-				}
-
-			},
-				Entry("intel vendor and vmx are required when EVMCS is enabled", true),
-				Entry("should not require intel vendor and vmx when EVMCS isn't enabled", false),
-			)
+				Expect(pod.Spec.NodeSelector).Should(HaveKeyWithValue(v1.CPUModelVendorLabel+IntelVendorName, "true"))
+			})
 
 			It("should not add node selector for hyperv nodes if VMI requests hyperv features which do not depend on host kernel", func() {
 				config, kvInformer, svc = configFactory(defaultArch)
@@ -1386,60 +1363,6 @@ var _ = Describe("Template", func() {
 				Expect(err).ToNot(HaveOccurred())
 
 				Expect(pod.Spec.NodeSelector).To(Not(HaveKey(ContainSubstring(NFD_KVM_INFO_PREFIX))))
-			})
-
-			Context("TSC frequency label", func() {
-				var noHints, validHints *v1.TopologyHints
-				validHints = &v1.TopologyHints{TSCFrequency: pointer.Int64(123123)}
-
-				setVmWithTscRequirementType := func(vmi *v1.VirtualMachineInstance, tscRequirementType topology.TscFrequencyRequirementType) {
-					switch tscRequirementType {
-					case topology.RequiredForBoot:
-						vmi.Spec.Domain.CPU = &v1.CPU{
-							Features: []v1.CPUFeature{
-								{
-									Name:   "invtsc",
-									Policy: "require",
-								},
-							},
-						}
-
-					case topology.RequiredForMigration:
-						vmi.Spec.Domain.Features = &v1.Features{
-							Hyperv: &v1.FeatureHyperv{
-								Reenlightenment: &v1.FeatureState{
-									Enabled: pointer.Bool(true),
-								},
-							},
-						}
-					}
-				}
-
-				DescribeTable("should", func(topologyHints *v1.TopologyHints, tscRequirementType topology.TscFrequencyRequirementType, isLabelExpected bool) {
-					config, kvInformer, svc = configFactory(defaultArch)
-
-					By("Setting up the vm")
-					vmi := api.NewMinimalVMIWithNS("testvmi", "default")
-					vmi.Status.TopologyHints = topologyHints
-					setVmWithTscRequirementType(vmi, tscRequirementType)
-
-					By("Rendering the vm into a pod")
-					pod, err := svc.RenderLaunchManifest(vmi)
-					Expect(err).ToNot(HaveOccurred())
-
-					if isLabelExpected {
-						Expect(pod.Spec.NodeSelector).To(HaveKeyWithValue("scheduling.node.kubevirt.io/tsc-frequency-123123", "true"))
-					} else {
-						Expect(pod.Spec.NodeSelector).ToNot(HaveKey("scheduling.node.kubevirt.io/tsc-frequency-123123"))
-					}
-				},
-					Entry("not be added if only topology hints are not defined and tsc is not requirement", noHints, topology.NotRequired, false),
-					Entry("not be added if only topology hints are not defined and tsc is required for boot", noHints, topology.RequiredForBoot, false),
-					Entry("not be added if only topology hints are not defined and tsc is required for migration", noHints, topology.RequiredForMigration, false),
-					Entry("not be added if only topology hints are defined and tsc is not required", validHints, topology.NotRequired, false),
-					Entry("be added if only topology hints are defined and tsc is required for boot", validHints, topology.RequiredForBoot, true),
-					Entry("be added if only topology hints are defined and tsc is required for migration", validHints, topology.RequiredForMigration, true),
-				)
 			})
 
 			It("should add default cpu/memory resources to the sidecar container if cpu pinning was requested", func() {
@@ -1527,9 +1450,6 @@ var _ = Describe("Template", func() {
 							Devices: v1.Devices{
 								DisableHotplug: true,
 							},
-							CPU: &v1.CPU{
-								Model: "Conroe",
-							},
 						},
 					},
 				}
@@ -1556,7 +1476,7 @@ var _ = Describe("Template", func() {
 				pod, err := svc.RenderLaunchManifest(&vm)
 				Expect(err).ToNot(HaveOccurred())
 
-				Expect(pod.Spec.Affinity.PodAffinity).To(BeEquivalentTo(&podAffinity))
+				Expect(pod.Spec.Affinity).To(BeEquivalentTo(&kubev1.Affinity{PodAffinity: &podAffinity}))
 			})
 
 			It("should add pod anti-affinity to pod", func() {
@@ -1576,7 +1496,7 @@ var _ = Describe("Template", func() {
 				pod, err := svc.RenderLaunchManifest(&vm)
 				Expect(err).ToNot(HaveOccurred())
 
-				Expect(pod.Spec.Affinity.PodAntiAffinity).To(BeEquivalentTo(&podAntiAffinity))
+				Expect(pod.Spec.Affinity).To(BeEquivalentTo(&kubev1.Affinity{PodAntiAffinity: &podAntiAffinity}))
 			})
 
 			It("should add tolerations to pod", func() {
@@ -1717,9 +1637,6 @@ var _ = Describe("Template", func() {
 							Devices: v1.Devices{
 								DisableHotplug: true,
 							},
-							CPU: &v1.CPU{
-								Model: "Conroe",
-							},
 						},
 					},
 				}
@@ -1728,39 +1645,6 @@ var _ = Describe("Template", func() {
 
 				Expect(pod.Spec.Affinity).To(BeNil())
 			})
-			DescribeTable("should add affinity to pod of vmi host model", func(model string) {
-				config, kvInformer, svc = configFactory(defaultArch)
-				foundNodeSelectorRequirement := false
-				vmi := v1.VirtualMachineInstance{
-					ObjectMeta: metav1.ObjectMeta{Name: "testvm", Namespace: "default", UID: "1234"},
-					Spec: v1.VirtualMachineInstanceSpec{
-						Domain: v1.DomainSpec{
-							Devices: v1.Devices{
-								DisableHotplug: true,
-							},
-							CPU: &v1.CPU{
-								Model: model,
-							},
-						},
-					},
-				}
-				pod, err := svc.RenderLaunchManifest(&vmi)
-				Expect(err).ToNot(HaveOccurred())
-
-				for _, term := range pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms {
-					for _, nodeSelectorRequirement := range term.MatchExpressions {
-						if nodeSelectorRequirement.Key == v1.NodeHostModelIsObsoleteLabel &&
-							nodeSelectorRequirement.Operator == kubev1.NodeSelectorOpDoesNotExist {
-							foundNodeSelectorRequirement = true
-						}
-					}
-				}
-				Expect(foundNodeSelectorRequirement).To(BeTrue())
-			},
-				Entry("explicitly using host-model", "host-model"),
-				Entry("empty string should be treated as host-model", ""),
-				Entry("nil should be treated as host-model", nil),
-			)
 		})
 		Context("with cpu and memory constraints", func() {
 			DescribeTable("should add cpu and memory constraints to a template", func(arch string, requestMemory string, limitMemory string) {
@@ -1799,8 +1683,8 @@ var _ = Describe("Template", func() {
 				Expect(pod.Spec.Containers[0].Resources.Requests.Memory().String()).To(Equal(requestMemory))
 				Expect(pod.Spec.Containers[0].Resources.Limits.Memory().String()).To(Equal(limitMemory))
 			},
-				Entry("on amd64", "amd64", "1255708517", "2255708517"),
-				Entry("on arm64", "arm64", "1389926245", "2389926245"),
+				Entry("on amd64", "amd64", "1253611365", "2253611365"),
+				Entry("on arm64", "arm64", "1387829093", "2387829093"),
 			)
 			DescribeTable("should overcommit guest overhead if selected, by only adding the overhead to memory limits", func(arch string, limitMemory string) {
 				config, kvInformer, svc = configFactory(arch)
@@ -1835,8 +1719,8 @@ var _ = Describe("Template", func() {
 				Expect(pod.Spec.Containers[0].Resources.Requests.Memory().String()).To(Equal("1G"))
 				Expect(pod.Spec.Containers[0].Resources.Limits.Memory().String()).To(Equal(limitMemory))
 			},
-				Entry("on amd64", "amd64", "2255708517"),
-				Entry("on arm64", "arm64", "2389926245"),
+				Entry("on amd64", "amd64", "2253611365"),
+				Entry("on arm64", "arm64", "2387829093"),
 			)
 			DescribeTable("should not add unset resources", func(arch string, requestMemory int) {
 				config, kvInformer, svc = configFactory(arch)
@@ -1873,8 +1757,8 @@ var _ = Describe("Template", func() {
 				// Limits for KVM and TUN devices should be requested.
 				Expect(pod.Spec.Containers[0].Resources.Limits).ToNot(BeNil())
 			},
-				Entry("on amd64", "amd64", 335),
-				Entry("on arm64", "arm64", 469),
+				Entry("on amd64", "amd64", 333),
+				Entry("on arm64", "arm64", 467),
 			)
 
 			DescribeTable("should check autoattachGraphicsDevicse", func(arch string, autoAttach *bool, memory int) {
@@ -1909,12 +1793,12 @@ var _ = Describe("Template", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(pod.Spec.Containers[0].Resources.Requests.Memory().ToDec().ScaledValue(resource.Mega)).To(Equal(int64(memory)))
 			},
-				Entry("and consider graphics overhead if it is not set on amd64", "amd64", nil, 335),
-				Entry("and consider graphics overhead if it is set to true on amd64", "amd64", pointer.Bool(true), 335),
-				Entry("and not consider graphics overhead if it is set to false on amd64", "amd64", pointer.Bool(false), 318),
-				Entry("and consider graphics overhead if it is not set on arm64", "arm64", nil, 469),
-				Entry("and consider graphics overhead if it is set to true on arm64", "arm64", pointer.Bool(true), 469),
-				Entry("and not consider graphics overhead if it is set to false on arm64", "arm64", pointer.Bool(false), 453),
+				Entry("and consider graphics overhead if it is not set on amd64", "amd64", nil, 333),
+				Entry("and consider graphics overhead if it is set to true on amd64", "amd64", True(), 333),
+				Entry("and not consider graphics overhead if it is set to false on amd64", "amd64", False(), 316),
+				Entry("and consider graphics overhead if it is not set on arm64", "arm64", nil, 467),
+				Entry("and consider graphics overhead if it is set to true on arm64", "arm64", True(), 467),
+				Entry("and not consider graphics overhead if it is set to false on arm64", "arm64", False(), 451),
 			)
 			It("should calculate vcpus overhead based on guest toplogy", func() {
 				config, kvInformer, svc = configFactory(defaultArch)
@@ -2095,37 +1979,28 @@ var _ = Describe("Template", func() {
 				Expect(hugepagesRequest.ToDec().ScaledValue(resource.Mega)).To(Equal(int64(64)))
 				Expect(hugepagesLimit.ToDec().ScaledValue(resource.Mega)).To(Equal(int64(64)))
 
-				Expect(pod.Spec.Volumes).To(HaveLen(9))
+				Expect(pod.Spec.Volumes).To(HaveLen(8))
 				Expect(pod.Spec.Volumes).To(
-					ContainElements(
+					ContainElement(
 						kubev1.Volume{
 							Name: "hugepages",
 							VolumeSource: kubev1.VolumeSource{
 								EmptyDir: &kubev1.EmptyDirVolumeSource{Medium: kubev1.StorageMediumHugePages},
 							},
-						},
-						kubev1.Volume{
-							Name: "hugetblfs-dir",
-							VolumeSource: kubev1.VolumeSource{
-								EmptyDir: &kubev1.EmptyDirVolumeSource{},
-							}}))
+						}))
 
-				Expect(pod.Spec.Containers[0].VolumeMounts).To(HaveLen(8))
+				Expect(pod.Spec.Containers[0].VolumeMounts).To(HaveLen(7))
 				Expect(pod.Spec.Containers[0].VolumeMounts).To(
-					ContainElements(
+					ContainElement(
 						kubev1.VolumeMount{
 							Name:      "hugepages",
 							MountPath: "/dev/hugepages"},
-						kubev1.VolumeMount{
-							Name:      "hugetblfs-dir",
-							MountPath: "/dev/hugepages/libvirt/qemu",
-						},
 					))
 			},
-				Entry("hugepages-2Mi on amd64", "amd64", "2Mi", 254),
-				Entry("hugepages-1Gi on amd64", "amd64", "1Gi", 254),
-				Entry("hugepages-2Mi on arm64", "arm64", "2Mi", 389),
-				Entry("hugepages-1Gi on arm64", "arm64", "1Gi", 389),
+				Entry("hugepages-2Mi on amd64", "amd64", "2Mi", 252),
+				Entry("hugepages-1Gi on amd64", "amd64", "1Gi", 252),
+				Entry("hugepages-2Mi on arm64", "arm64", "2Mi", 387),
+				Entry("hugepages-1Gi on arm64", "arm64", "1Gi", 387),
 			)
 			DescribeTable("should account for difference between guest and container requested memory ", func(arch string, memorySize int) {
 				config, kvInformer, svc = configFactory(arch)
@@ -2173,35 +2048,26 @@ var _ = Describe("Template", func() {
 				Expect(hugepagesRequest.ToDec().ScaledValue(resource.Mega)).To(Equal(int64(64)))
 				Expect(hugepagesLimit.ToDec().ScaledValue(resource.Mega)).To(Equal(int64(64)))
 
-				Expect(pod.Spec.Volumes).To(HaveLen(9))
+				Expect(pod.Spec.Volumes).To(HaveLen(8))
 				Expect(pod.Spec.Volumes).To(
-					ContainElements(
+					ContainElement(
 						kubev1.Volume{
 							Name: "hugepages",
 							VolumeSource: kubev1.VolumeSource{
 								EmptyDir: &kubev1.EmptyDirVolumeSource{Medium: kubev1.StorageMediumHugePages},
 							},
-						},
-						kubev1.Volume{
-							Name: "hugetblfs-dir",
-							VolumeSource: kubev1.VolumeSource{
-								EmptyDir: &kubev1.EmptyDirVolumeSource{},
-							}}))
+						}))
 
-				Expect(pod.Spec.Containers[0].VolumeMounts).To(HaveLen(8))
+				Expect(pod.Spec.Containers[0].VolumeMounts).To(HaveLen(7))
 				Expect(pod.Spec.Containers[0].VolumeMounts).To(
-					ContainElements(
+					ContainElement(
 						kubev1.VolumeMount{
 							Name:      "hugepages",
 							MountPath: "/dev/hugepages"},
-						kubev1.VolumeMount{
-							Name:      "hugetblfs-dir",
-							MountPath: "/dev/hugepages/libvirt/qemu",
-						},
 					))
 			},
-				Entry("on amd64", "amd64", 254),
-				Entry("on arm64", "arm64", 389),
+				Entry("on amd64", "amd64", 252),
+				Entry("on arm64", "arm64", 387),
 			)
 		})
 
@@ -2358,7 +2224,7 @@ var _ = Describe("Template", func() {
 
 				_, err := svc.RenderLaunchManifest(&vmi)
 				Expect(err).To(HaveOccurred(), "Render manifest results in an error")
-				Expect(err).To(BeAssignableToTypeOf(storagetypes.PvcNotFoundError{}), "Render manifest results in an PvsNotFoundError")
+				Expect(err).To(BeAssignableToTypeOf(PvcNotFoundError{}), "Render manifest results in an PvsNotFoundError")
 			})
 		})
 
@@ -3139,7 +3005,7 @@ var _ = Describe("Template", func() {
 
 				resources := pod.Spec.Containers[0].Resources
 				val, ok := resources.Requests["vendor.com/gpu_name"]
-				Expect(ok).To(BeTrue())
+				Expect(ok).To(Equal(true))
 				Expect(val).To(Equal(*resource.NewQuantity(1, resource.DecimalSI)))
 			})
 		})
@@ -3216,7 +3082,7 @@ var _ = Describe("Template", func() {
 
 				resources := pod.Spec.Containers[0].Resources
 				val, ok := resources.Requests["vendor.com/dev_name"]
-				Expect(ok).To(BeTrue())
+				Expect(ok).To(Equal(true))
 				Expect(val).To(Equal(*resource.NewQuantity(1, resource.DecimalSI)))
 			})
 		})
@@ -3397,7 +3263,7 @@ var _ = Describe("Template", func() {
 			for _, container := range pod.Spec.Containers {
 				if container.Name == "compute" {
 					Expect(container.SecurityContext.Capabilities.Add).To(
-						ContainElements(kubev1.Capability("NET_BIND_SERVICE")))
+						ContainElements(kubev1.Capability("NET_BIND_SERVICE"), kubev1.Capability("SYS_PTRACE")))
 					return
 				}
 			}
@@ -3605,18 +3471,6 @@ var _ = Describe("Template", func() {
 			Expect(int(sev.Value())).To(Equal(1))
 		})
 	})
-
-	Context("with VSOCK enabled", func() {
-		It("should add VSOCK device to resources", func() {
-			vmi := api.NewMinimalVMI("fake-vmi")
-			vmi.Spec.Domain.Devices.AutoattachVSOCK = pointer.Bool(true)
-
-			pod, err := svc.RenderLaunchManifest(vmi)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(pod).ToNot(BeNil())
-			Expect(pod.Spec.Containers[0].Resources.Limits).To(HaveKey(kubev1.ResourceName(VhostVsockDevice)))
-		})
-	})
 })
 
 var _ = Describe("getResourceNameForNetwork", func() {
@@ -3699,6 +3553,16 @@ func newVMIWithSriovInterface(name, uid string) *v1.VirtualMachineInstance {
 	vmi.Spec.Domain.Devices.Interfaces = []v1.Interface{sriovInterface}
 
 	return vmi
+}
+
+func True() *bool {
+	b := true
+	return &b
+}
+
+func False() *bool {
+	b := false
+	return &b
 }
 
 func validateAndExtractQemuTimeoutArg(args []string) string {

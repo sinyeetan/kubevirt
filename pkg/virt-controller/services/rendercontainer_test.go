@@ -79,10 +79,6 @@ var _ = Describe("Container spec renderer", func() {
 	})
 
 	Context("vmi capabilities", func() {
-		allowedCapabilities := []k8sv1.Capability{
-			CAP_NET_BIND_SERVICE,
-			CAP_SYS_NICE,
-		}
 		Context("a VMI running as root", func() {
 			BeforeEach(func() {
 				specRenderer = NewContainerSpecRenderer(containerName, img, pullPolicy, WithCapabilities(simplestVMI()))
@@ -93,9 +89,12 @@ var _ = Describe("Container spec renderer", func() {
 					Equal([]k8sv1.Capability{CAP_NET_RAW}))
 			})
 
-			It("must request to add the NET_BIND_SERVICE and SYS_NICE capabilities", func() {
+			It("must request to add the NET_BIND_SERVICE, SYS_NICE and SYS_PTRACE capabilities", func() {
 				Expect(specRenderer.Render(exampleCommand).SecurityContext.Capabilities.Add).To(
-					ConsistOf(allowedCapabilities))
+					ConsistOf(
+						k8sv1.Capability(CAP_NET_BIND_SERVICE),
+						k8sv1.Capability(CAP_SYS_NICE),
+						k8sv1.Capability(CAP_SYS_PTRACE)))
 			})
 
 			Context("with a virtioFS filesystem", func() {
@@ -108,9 +107,17 @@ var _ = Describe("Container spec renderer", func() {
 						WithCapabilities(vmiWithVirtioFS(rootUser)))
 				})
 
-				It("cannot request additional capabilities", func() {
+				It("must request the virtio related capabilities", func() {
 					Expect(specRenderer.Render(exampleCommand).SecurityContext.Capabilities.Add).Should(
-						ConsistOf(allowedCapabilities))
+						ConsistOf(
+							append(
+								[]k8sv1.Capability{
+									CAP_NET_BIND_SERVICE,
+									CAP_SYS_NICE,
+									CAP_SYS_ADMIN,
+									CAP_SYS_PTRACE},
+								getVirtiofsCapabilities()...),
+						))
 				})
 			})
 		})
@@ -125,9 +132,9 @@ var _ = Describe("Container spec renderer", func() {
 					WithCapabilities(nonRootVMI(nonRootUser)))
 			})
 
-			It("must request the NET_BIND_SERVICE capability", func() {
+			It("must request the NET_BIND_SERVICE and SYS_PTRACE capabilities", func() {
 				Expect(specRenderer.Render(exampleCommand).SecurityContext.Capabilities.Add).Should(
-					ConsistOf(k8sv1.Capability(CAP_NET_BIND_SERVICE)))
+					ConsistOf(k8sv1.Capability(CAP_NET_BIND_SERVICE), k8sv1.Capability(CAP_SYS_PTRACE)))
 			})
 		})
 	})

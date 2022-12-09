@@ -236,11 +236,19 @@ func wrapExecProbeWithVirtProbe(vmi *v1.VirtualMachineInstance, probe *k8sv1.Pro
 
 func requiredCapabilities(vmi *v1.VirtualMachineInstance) []k8sv1.Capability {
 	// These capabilies are always required because we set them on virt-launcher binary
-	capabilities := []k8sv1.Capability{CAP_NET_BIND_SERVICE}
+	// add CAP_SYS_PTRACE capability needed by libvirt + swtpm
+	// TODO: drop SYS_PTRACE after updating libvirt to a release containing:
+	// https://github.com/libvirt/libvirt/commit/a9c500d2b50c5c041a1bb6ae9724402cf1cec8fe
+	capabilities := []k8sv1.Capability{CAP_NET_BIND_SERVICE, CAP_SYS_PTRACE}
 
 	if !util.IsNonRootVMI(vmi) {
 		// add a CAP_SYS_NICE capability to allow setting cpu affinity
 		capabilities = append(capabilities, CAP_SYS_NICE)
+		// add CAP_SYS_ADMIN capability to allow virtiofs
+		if util.IsVMIVirtiofsEnabled(vmi) {
+			capabilities = append(capabilities, CAP_SYS_ADMIN)
+			capabilities = append(capabilities, getVirtiofsCapabilities()...)
+		}
 	}
 
 	return capabilities

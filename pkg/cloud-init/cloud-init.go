@@ -22,7 +22,6 @@ package cloudinit
 import (
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -175,13 +174,15 @@ func resolveNoCloudSecrets(vmi *v1.VirtualMachineInstance, secretSourceDir strin
 	}
 
 	baseDir := filepath.Join(secretSourceDir, volume.Name)
-	var userDataError, networkDataError error
-	var userData, networkData string
-	if volume.CloudInitNoCloud.UserDataSecretRef != nil {
-		userData, userDataError = readFirstFoundFileFromDir(baseDir, []string{"userdata", "userData"})
+	userData, userDataError := readFileFromDir(baseDir, "userdata")
+	// If "userdata" was not found, try "userData"
+	if userDataError != nil {
+		userData, userDataError = readFileFromDir(baseDir, "userData")
 	}
-	if volume.CloudInitNoCloud.NetworkDataSecretRef != nil {
-		networkData, networkDataError = readFirstFoundFileFromDir(baseDir, []string{"networkdata", "networkData"})
+	networkData, networkDataError := readFileFromDir(baseDir, "networkdata")
+	// If "networkdata" was not found, try "networkData"
+	if networkDataError != nil {
+		networkData, networkDataError = readFileFromDir(baseDir, "networkData")
 	}
 	if userDataError != nil && networkDataError != nil {
 		return fmt.Errorf("no cloud-init data-source found at volume: %s", volume.Name)
@@ -251,17 +252,20 @@ func resolveConfigDriveSecrets(vmi *v1.VirtualMachineInstance, secretSourceDir s
 	}
 
 	baseDir := filepath.Join(secretSourceDir, volume.Name)
-	var userDataError, networkDataError error
-	var userData, networkData string
-	if volume.CloudInitConfigDrive.UserDataSecretRef != nil {
-		userData, userDataError = readFirstFoundFileFromDir(baseDir, []string{"userdata", "userData"})
+	userData, userDataError := readFileFromDir(baseDir, "userdata")
+	// If "userdata" was not found, try "userData"
+	if userDataError != nil {
+		userData, userDataError = readFileFromDir(baseDir, "userData")
 	}
-	if volume.CloudInitConfigDrive.NetworkDataSecretRef != nil {
-		networkData, networkDataError = readFirstFoundFileFromDir(baseDir, []string{"networkdata", "networkData"})
+	networkData, networkDataError := readFileFromDir(baseDir, "networkdata")
+	// If "networkdata" was not found, try "networkData"
+	if networkDataError != nil {
+		networkData, networkDataError = readFileFromDir(baseDir, "networkData")
 	}
 	if userDataError != nil && networkDataError != nil {
 		return keys, fmt.Errorf("no cloud-init data-source found at volume: %s", volume.Name)
 	}
+
 	if userData != "" {
 		volume.CloudInitConfigDrive.UserData = userData
 	}
@@ -288,27 +292,16 @@ func findCloudInitConfigDriveSecretVolume(volumes []v1.Volume) *v1.Volume {
 	return nil
 }
 
-func readFirstFoundFileFromDir(basedir string, files []string) (string, error) {
-	var err error
-	var data string
-	for _, file := range files {
-		data, err = readFileFromDir(basedir, file)
-		if err == nil {
-			break
-		}
-	}
-	return data, err
-}
-func readFileFromDir(basedir, file string) (string, error) {
-	filePath := filepath.Join(basedir, file)
+func readFileFromDir(basedir, secretFile string) (string, error) {
+	userDataSecretFile := filepath.Join(basedir, secretFile)
 	// #nosec No risk for path injection: basedir & secretFile are static strings
-	data, err := os.ReadFile(filePath)
+	userDataSecret, err := os.ReadFile(userDataSecretFile)
 	if err != nil {
 		log.Log.V(2).Reason(err).
-			Errorf("could not read data from source: %s", filePath)
+			Errorf("could not read secret data from source: %s", userDataSecretFile)
 		return "", err
 	}
-	return string(data), nil
+	return string(userDataSecret), nil
 }
 
 // findCloudInitNoCloudSecretVolume loops over a given list of volumes and return a pointer
@@ -496,7 +489,7 @@ func PrepareLocalPath(vmiName string, namespace string) error {
 func removeLocalData(domain string, namespace string) error {
 	domainBasePath := getDomainBasePath(domain, namespace)
 	err := os.RemoveAll(domainBasePath)
-	if err != nil && errors.Is(err, os.ErrNotExist) {
+	if err != nil && os.IsNotExist(err) {
 		return nil
 	}
 	return err

@@ -22,7 +22,6 @@ package ephemeraldiskutils
 //go:generate mockgen -source $GOFILE -package=$GOPACKAGE -destination=generated_mock_$GOFILE
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -100,7 +99,7 @@ func RemoveFilesIfExist(paths ...string) error {
 	var err error
 	for _, path := range paths {
 		err = os.Remove(path)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
@@ -112,7 +111,7 @@ func FileExists(path string) (bool, error) {
 
 	if err == nil {
 		exists = true
-	} else if errors.Is(err, os.ErrNotExist) {
+	} else if os.IsNotExist(err) {
 		err = nil
 	}
 	return exists, err

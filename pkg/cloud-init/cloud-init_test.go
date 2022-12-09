@@ -22,8 +22,8 @@ package cloudinit
 import (
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,7 +58,7 @@ var _ = Describe("CloudInit", func() {
 		err := os.Mkdir(volumeDir, 0700)
 		Expect(err).To(Not(HaveOccurred()), "could not create volume dir: ", volumeDir)
 		for fileName, content := range files {
-			err = os.WriteFile(
+			err = ioutil.WriteFile(
 				filepath.Join(volumeDir, fileName),
 				[]byte(content),
 				0644)
@@ -69,7 +69,7 @@ var _ = Describe("CloudInit", func() {
 
 	BeforeEach(func() {
 		var err error
-		tmpDir, err = os.MkdirTemp("", "cloudinittest")
+		tmpDir, err = ioutil.TempDir("", "cloudinittest")
 		Expect(err).ToNot(HaveOccurred())
 		err = SetLocalDirectory(tmpDir)
 		if err != nil {
@@ -308,7 +308,7 @@ var _ = Describe("CloudInit", func() {
 
 				// verify iso and entire dir is deleted
 				_, err = os.Stat(fmt.Sprintf("%s/%s/%s", tmpDir, namespace, domain))
-				if errors.Is(err, os.ErrNotExist) {
+				if os.IsNotExist(err) {
 					err = nil
 				}
 				Expect(err).ToNot(HaveOccurred())
@@ -394,9 +394,6 @@ var _ = Describe("CloudInit", func() {
 							VolumeSource: v1.VolumeSource{
 								CloudInitNoCloud: &v1.CloudInitNoCloudSource{
 									UserDataSecretRef: &k8sv1.LocalObjectReference{
-										Name: secret,
-									},
-									NetworkDataSecretRef: &k8sv1.LocalObjectReference{
 										Name: secret,
 									},
 								},
@@ -512,9 +509,6 @@ var _ = Describe("CloudInit", func() {
 							VolumeSource: v1.VolumeSource{
 								CloudInitConfigDrive: &v1.CloudInitConfigDriveSource{
 									UserDataSecretRef: &k8sv1.LocalObjectReference{
-										Name: secret,
-									},
-									NetworkDataSecretRef: &k8sv1.LocalObjectReference{
 										Name: secret,
 									},
 								},

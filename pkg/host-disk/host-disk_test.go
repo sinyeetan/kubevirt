@@ -20,8 +20,8 @@
 package hostdisk
 
 import (
-	"errors"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"path"
 	"strings"
@@ -94,8 +94,8 @@ var _ = Describe("HostDisk", func() {
 
 	BeforeEach(func() {
 		var err error
-		tempDir, err = os.MkdirTemp("", "host-disk-images")
-		Expect(setDiskDirectory(tempDir)).To(Succeed())
+		tempDir, err = ioutil.TempDir("", "host-disk-images")
+		setDiskDirectory(tempDir)
 		Expect(err).NotTo(HaveOccurred())
 
 		recorder = record.NewFakeRecorder(100)
@@ -110,7 +110,7 @@ var _ = Describe("HostDisk", func() {
 	})
 
 	AfterEach(func() {
-		Expect(os.RemoveAll(tempDir)).To(Succeed())
+		os.RemoveAll(tempDir)
 	})
 
 	Describe("HostDisk with 'Disk' type", func() {
@@ -146,7 +146,7 @@ var _ = Describe("HostDisk", func() {
 
 			// disk.img should not exist
 			_, err = os.Stat(vmi.Spec.Volumes[0].HostDisk.Path)
-			Expect(true).To(Equal(errors.Is(err, os.ErrNotExist)))
+			Expect(true).To(Equal(os.IsNotExist(err)))
 		})
 	})
 
@@ -200,10 +200,10 @@ var _ = Describe("HostDisk", func() {
 					Expect(img1.Size()).To(Equal(int64(67108864))) // 64Mi
 
 					_, err = os.Stat(vmi.Spec.Volumes[1].HostDisk.Path)
-					Expect(true).To(Equal(errors.Is(err, os.ErrNotExist)))
+					Expect(true).To(Equal(os.IsNotExist(err)))
 
 					_, err = os.Stat(vmi.Spec.Volumes[2].HostDisk.Path)
-					Expect(true).To(Equal(errors.Is(err, os.ErrNotExist)))
+					Expect(true).To(Equal(os.IsNotExist(err)))
 				})
 
 				It("Should NOT subtract reserve if there is enough space on storage for requested size", func() {
@@ -262,7 +262,7 @@ var _ = Describe("HostDisk", func() {
 					Expect(err.Error()).To(ContainSubstring("unable to create"))
 
 					_, err = os.Stat(vmi.Spec.Volumes[0].HostDisk.Path)
-					Expect(true).To(Equal(errors.Is(err, os.ErrNotExist)))
+					Expect(true).To(Equal(os.IsNotExist(err)))
 				})
 
 				It("Should take lessPVCSpaceToleration into account when creating disk images", func() {
@@ -313,7 +313,7 @@ var _ = Describe("HostDisk", func() {
 					Expect(uint64(img2.Size())).To(Equal(calcToleratedSize(size64Mi, 0))) // 64Mi
 
 					_, err = os.Stat(vmi.Spec.Volumes[2].HostDisk.Path)
-					Expect(true).To(Equal(errors.Is(err, os.ErrNotExist)))
+					Expect(true).To(Equal(os.IsNotExist(err)))
 
 					testutils.ExpectEvent(recorder, "PV size too small")
 				})
@@ -362,7 +362,7 @@ var _ = Describe("HostDisk", func() {
 
 			// disk.img should not exist
 			_, err = os.Stat(vmi.Spec.Volumes[0].HostDisk.Path)
-			Expect(true).To(Equal(errors.Is(err, os.ErrNotExist)))
+			Expect(true).To(Equal(os.IsNotExist(err)))
 		})
 	})
 
@@ -424,7 +424,7 @@ var _ = Describe("HostDisk", func() {
 			}
 
 			By("Replacing PVCs with hostdisks")
-			Expect(ReplacePVCByHostDisk(vmi)).To(Succeed())
+			ReplacePVCByHostDisk(vmi)
 
 			Expect(vmi.Spec.Volumes).To(HaveLen(1), "There should still be 1 volume")
 

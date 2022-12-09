@@ -22,6 +22,7 @@ package hooks
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"os"
 	"path/filepath"
@@ -84,7 +85,7 @@ var _ = Describe("HooksManager", func() {
 
 		BeforeEach(func() {
 			var err error
-			socketDir, err = os.MkdirTemp("", "hooksocketdir")
+			socketDir, err = ioutil.TempDir("", "hooksocketdir")
 			Expect(err).ToNot(HaveOccurred())
 			os.MkdirAll(socketDir, os.ModePerm)
 		})

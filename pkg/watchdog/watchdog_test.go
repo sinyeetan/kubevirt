@@ -20,6 +20,7 @@
 package watchdog
 
 import (
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"time"
@@ -44,7 +45,7 @@ var _ = Describe("Watchdog", func() {
 
 		BeforeEach(func() {
 
-			tmpVirtShareDir, err = os.MkdirTemp("", "kubevirt")
+			tmpVirtShareDir, err = ioutil.TempDir("", "kubevirt")
 			Expect(err).ToNot(HaveOccurred())
 
 			tmpWatchdogDir = WatchdogFileDirectory(tmpVirtShareDir)
@@ -122,7 +123,7 @@ var _ = Describe("Watchdog", func() {
 			now := time.Now()
 
 			for i := 0; i < 4; i++ {
-				Expect(WatchdogFileUpdate(fileName, "somestring")).To(Succeed())
+				WatchdogFileUpdate(fileName, "somestring")
 				now = now.Add(time.Second * 1)
 				domains, err := getExpiredDomains(2, tmpVirtShareDir, now)
 				Expect(err).ToNot(HaveOccurred())
@@ -135,7 +136,7 @@ var _ = Describe("Watchdog", func() {
 			vmi.UID = types.UID("1234")
 
 			fileName := filepath.Join(tmpVirtShareDir, "watchdog-files", vmi.Namespace+"_"+vmi.Name)
-			Expect(WatchdogFileUpdate(fileName, string(vmi.UID))).To(Succeed())
+			WatchdogFileUpdate(fileName, string(vmi.UID))
 
 			uid := WatchdogFileGetUID(tmpVirtShareDir, vmi)
 			Expect(uid).To(Equal(string(vmi.UID)))
@@ -150,7 +151,7 @@ var _ = Describe("Watchdog", func() {
 		})
 
 		AfterEach(func() {
-			Expect(os.RemoveAll(tmpVirtShareDir)).To(Succeed())
+			os.RemoveAll(tmpVirtShareDir)
 		})
 
 	})

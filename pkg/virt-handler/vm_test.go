@@ -21,8 +21,8 @@ package virthandler
 
 import (
 	"crypto/tls"
-	"errors"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"os"
 	"path/filepath"
@@ -131,17 +131,17 @@ var _ = Describe("VirtualMachineInstance", func() {
 		wg = &sync.WaitGroup{}
 		stop = make(chan struct{})
 		eventChan = make(chan watch.Event, 100)
-		shareDir, err = os.MkdirTemp("", "")
+		shareDir, err = ioutil.TempDir("", "")
 		Expect(err).ToNot(HaveOccurred())
-		privateDir, err = os.MkdirTemp("", "")
+		privateDir, err = ioutil.TempDir("", "")
 		Expect(err).ToNot(HaveOccurred())
-		podsDir, err = os.MkdirTemp("", "")
+		podsDir, err = ioutil.TempDir("", "")
 		Expect(err).ToNot(HaveOccurred())
-		certDir, err = os.MkdirTemp("", "migrationproxytest")
+		certDir, err = ioutil.TempDir("", "migrationproxytest")
 		Expect(err).ToNot(HaveOccurred())
-		vmiShareDir, err = os.MkdirTemp("", "")
+		vmiShareDir, err = ioutil.TempDir("", "")
 		Expect(err).ToNot(HaveOccurred())
-		ghostCacheDir, err = os.MkdirTemp("", "")
+		ghostCacheDir, err = ioutil.TempDir("", "")
 		Expect(err).ToNot(HaveOccurred())
 
 		err = virtcache.InitializeGhostRecordCache(ghostCacheDir)
@@ -210,7 +210,6 @@ var _ = Describe("VirtualMachineInstance", func() {
 			podIpAddress,
 			shareDir,
 			privateDir,
-			podsDir,
 			vmiSourceInformer,
 			vmiTargetInformer,
 			domainInformer,
@@ -481,7 +480,7 @@ var _ = Describe("VirtualMachineInstance", func() {
 			Expect(mockQueue.Len()).To(Equal(0))
 			Expect(mockQueue.GetRateLimitedEnqueueCount()).To(Equal(0))
 			_, err := os.Stat(mockWatchdog.File(oldVMI))
-			Expect(errors.Is(err, os.ErrNotExist)).To(BeFalse())
+			Expect(os.IsNotExist(err)).To(BeFalse())
 		})
 
 		It("should silently retry if the command socket is not yet ready", func() {
@@ -556,7 +555,7 @@ var _ = Describe("VirtualMachineInstance", func() {
 			Expect(mockQueue.Len()).To(Equal(0))
 			Expect(mockQueue.GetRateLimitedEnqueueCount()).To(Equal(0))
 			_, err := os.Stat(mockWatchdog.File(oldVMI))
-			Expect(errors.Is(err, os.ErrNotExist)).To(BeTrue())
+			Expect(os.IsNotExist(err)).To(BeTrue())
 			Expect(controller.netConf.SetupCompleted(vmi)).To(BeFalse())
 			Expect(controller.netConf.SetupCompleted(oldVMI)).To(BeFalse())
 		})
@@ -575,7 +574,7 @@ var _ = Describe("VirtualMachineInstance", func() {
 			Expect(mockQueue.Len()).To(Equal(0))
 			Expect(mockQueue.GetRateLimitedEnqueueCount()).To(Equal(0))
 			_, err := os.Stat(mockWatchdog.File(vmi))
-			Expect(errors.Is(err, os.ErrNotExist)).To(BeTrue())
+			Expect(os.IsNotExist(err)).To(BeTrue())
 			Expect(controller.netConf.SetupCompleted(vmi)).To(BeFalse())
 		})
 
@@ -605,7 +604,7 @@ var _ = Describe("VirtualMachineInstance", func() {
 			Expect(mockQueue.Len()).To(Equal(0))
 			Expect(mockQueue.GetRateLimitedEnqueueCount()).To(Equal(0))
 			_, err := os.Stat(mockWatchdog.File(vmi))
-			Expect(errors.Is(err, os.ErrNotExist)).To(BeFalse())
+			Expect(os.IsNotExist(err)).To(BeFalse())
 		})
 
 		It("should attempt force terminate Domain if grace period expires", func() {
@@ -2785,7 +2784,7 @@ var _ = Describe("VirtualMachineInstance", func() {
 					Device: "disk",
 					Type:   "file",
 					Source: api.DiskSource{
-						File: filepath.Join(v1.HotplugDiskDir, "hpvolume1/disk.img"),
+						File: "/var/run/kubevirt/hotplug-disks/hpvolume1/disk.img",
 					},
 					Target: api.DiskTarget{
 						Bus:    v1.DiskBusSCSI,
@@ -2949,7 +2948,7 @@ var _ = Describe("DomainNotifyServerRestarts", func() {
 			eventChan = make(chan watch.Event, 100)
 			stoppedServer = false
 			stoppedPipe = false
-			shareDir, err = os.MkdirTemp("", "kubevirt-share")
+			shareDir, err = ioutil.TempDir("", "kubevirt-share")
 			Expect(err).ToNot(HaveOccurred())
 
 			recorder = record.NewFakeRecorder(10)

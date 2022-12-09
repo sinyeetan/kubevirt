@@ -22,6 +22,7 @@ package eventsclient
 import (
 	"encoding/xml"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"time"
 
@@ -72,7 +73,7 @@ var _ = Describe("Notify", func() {
 			eventChan = make(chan watch.Event, 100)
 			deleteNotificationSent = make(chan watch.Event, 100)
 			stopped = false
-			shareDir, err = os.MkdirTemp("", "kubevirt-share")
+			shareDir, err = ioutil.TempDir("", "kubevirt-share")
 			Expect(err).ToNot(HaveOccurred())
 
 			go func() {
@@ -275,7 +276,7 @@ var _ = Describe("Notify", func() {
 			eventChan = make(chan watch.Event, 100)
 			deleteNotificationSent = make(chan watch.Event, 100)
 			stopped = false
-			shareDir, err = os.MkdirTemp("", "kubevirt-share")
+			shareDir, err = ioutil.TempDir("", "kubevirt-share")
 			Expect(err).ToNot(HaveOccurred())
 
 			recorder = record.NewFakeRecorder(10)

@@ -32,8 +32,6 @@ import (
 	"syscall"
 	"time"
 
-	kvtls "kubevirt.io/kubevirt/pkg/util/tls"
-
 	"github.com/emicklei/go-restful"
 	"github.com/golang/glog"
 	flag "github.com/spf13/pflag"
@@ -75,6 +73,7 @@ import (
 	_ "kubevirt.io/kubevirt/pkg/monitoring/workqueue/prometheus" // import for prometheus metrics
 	"kubevirt.io/kubevirt/pkg/service"
 	"kubevirt.io/kubevirt/pkg/util"
+	"kubevirt.io/kubevirt/pkg/util/webhooks"
 	virtconfig "kubevirt.io/kubevirt/pkg/virt-config"
 	virthandler "kubevirt.io/kubevirt/pkg/virt-handler"
 	virtcache "kubevirt.io/kubevirt/pkg/virt-handler/cache"
@@ -196,6 +195,7 @@ func (app *virtHandlerApp) Run() {
 
 	logger := log.Log
 	logger.V(1).Level(log.INFO).Log("hostname", app.HostOverride)
+	logger.Infof("======================================VirtHandler RUn===============================")
 	var err error
 
 	// Copy container-disk binary
@@ -288,6 +288,10 @@ func (app *virtHandlerApp) Run() {
 		glog.Fatalf("Error preparing the certificate manager: %v", err)
 	}
 
+	if err := app.setupTLS(factory); err != nil {
+		glog.Fatalf("Error constructing migration tls config: %v", err)
+	}
+
 	// Legacy support, Remove this informer once we no longer support
 	// VMIs with graceful shutdown trigger
 	gracefulShutdownInformer := cache.NewSharedIndexInformer(
@@ -302,10 +306,6 @@ func (app *virtHandlerApp) Run() {
 	app.clusterConfig.SetConfigModifiedCallback(app.shouldChangeLogVerbosity)
 	app.clusterConfig.SetConfigModifiedCallback(app.shouldChangeRateLimiter)
 
-	if err := app.setupTLS(factory); err != nil {
-		glog.Fatalf("Error constructing migration tls config: %v", err)
-	}
-
 	migrationProxy := migrationproxy.NewMigrationProxyManager(app.serverTLSConfig, app.clientTLSConfig, app.clusterConfig)
 
 	stop := make(chan struct{})
@@ -314,8 +314,7 @@ func (app *virtHandlerApp) Run() {
 	var capabilities *api.Capabilities
 	var hostCpuModel string
 	if virtconfig.IsAMD64(runtime.GOARCH) {
-		nodeLabellerrecorder := broadcaster.NewRecorder(scheme.Scheme, k8sv1.EventSource{Component: "node-labeller", Host: app.HostOverride})
-		nodeLabellerController, err := nodelabeller.NewNodeLabeller(app.clusterConfig, app.virtCli, app.HostOverride, app.namespace, nodeLabellerrecorder)
+		nodeLabellerController, err := nodelabeller.NewNodeLabeller(app.clusterConfig, app.virtCli, app.HostOverride, app.namespace)
 		if err != nil {
 			panic(err)
 		}
@@ -340,7 +339,6 @@ func (app *virtHandlerApp) Run() {
 		migrationIpAddress,
 		app.VirtShareDir,
 		app.VirtPrivateDir,
-		app.KubeletPodsDir,
 		vmiSourceInformer,
 		vmiTargetInformer,
 		domainSharedInformer,
@@ -517,7 +515,6 @@ func (app *virtHandlerApp) runServer(errCh chan error, consoleHandler *rest.Cons
 	ws.Route(ws.GET("/v1/namespaces/{namespace}/virtualmachineinstances/{name}/guestosinfo").To(lifecycleHandler.GetGuestInfo).Produces(restful.MIME_JSON).Consumes(restful.MIME_JSON).Returns(http.StatusOK, "OK", v1.VirtualMachineInstanceGuestAgentInfo{}))
 	ws.Route(ws.GET("/v1/namespaces/{namespace}/virtualmachineinstances/{name}/userlist").To(lifecycleHandler.GetUsers).Produces(restful.MIME_JSON).Consumes(restful.MIME_JSON).Returns(http.StatusOK, "OK", v1.VirtualMachineInstanceGuestOSUserList{}))
 	ws.Route(ws.GET("/v1/namespaces/{namespace}/virtualmachineinstances/{name}/filesystemlist").To(lifecycleHandler.GetFilesystems).Produces(restful.MIME_JSON).Consumes(restful.MIME_JSON).Returns(http.StatusOK, "OK", v1.VirtualMachineInstanceFileSystemList{}))
-	ws.Route(ws.GET("/v1/namespaces/{namespace}/virtualmachineinstances/{name}/vsock").Param(restful.QueryParameter("port", "Target VSOCK port")).To(consoleHandler.VSOCKHandler))
 	restful.DefaultContainer.Add(ws)
 	server := &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", app.ServiceListen.BindAddress, app.consoleServerPort),
@@ -600,11 +597,11 @@ func (app *virtHandlerApp) setupTLS(factory controller.KubeInformerFactory) erro
 		apiHealthVersion.Clear()
 		cache.DefaultWatchErrorHandler(r, err)
 	})
-	caManager := kvtls.NewCAManager(kubevirtCAConfigInformer.GetStore(), app.namespace, app.caConfigMapName)
+	caManager := webhooks.NewCAManager(kubevirtCAConfigInformer.GetStore(), app.namespace, app.caConfigMapName)
 
-	app.promTLSConfig = kvtls.SetupPromTLS(app.servercertmanager, app.clusterConfig)
-	app.serverTLSConfig = kvtls.SetupTLSForVirtHandlerServer(caManager, app.servercertmanager, app.externallyManaged, app.clusterConfig)
-	app.clientTLSConfig = kvtls.SetupTLSForVirtHandlerClients(caManager, app.clientcertmanager, app.externallyManaged)
+	app.promTLSConfig = webhooks.SetupPromTLS(app.servercertmanager)
+	app.serverTLSConfig = webhooks.SetupTLSForVirtHandlerServer(caManager, app.servercertmanager, app.externallyManaged)
+	app.clientTLSConfig = webhooks.SetupTLSForVirtHandlerClients(caManager, app.clientcertmanager, app.externallyManaged)
 
 	return nil
 }
@@ -613,6 +610,7 @@ func main() {
 	app := &virtHandlerApp{}
 	service.Setup(app)
 	log.InitializeLogging("virt-handler")
+	log.Log.Info("======================entry point for virt handler=========================")
 	app.Run()
 }
 

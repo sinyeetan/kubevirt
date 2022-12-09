@@ -24,14 +24,13 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
-
-	kvtls "kubevirt.io/kubevirt/pkg/util/tls"
 
 	restful "github.com/emicklei/go-restful"
 	"github.com/go-openapi/spec"
@@ -60,6 +59,7 @@ import (
 	"kubevirt.io/kubevirt/pkg/service"
 	"kubevirt.io/kubevirt/pkg/util"
 	"kubevirt.io/kubevirt/pkg/util/openapi"
+	webhooksutils "kubevirt.io/kubevirt/pkg/util/webhooks"
 	"kubevirt.io/kubevirt/pkg/virt-api/definitions"
 	"kubevirt.io/kubevirt/pkg/virt-api/rest"
 	"kubevirt.io/kubevirt/pkg/virt-api/webhooks"
@@ -169,7 +169,7 @@ func (app *virtAPIApp) Execute() {
 
 	app.authorizor = authorizor
 
-	app.certsDirectory, err = os.MkdirTemp("", "certsdir")
+	app.certsDirectory, err = ioutil.TempDir("", "certsdir")
 	if err != nil {
 		panic(err)
 	}
@@ -214,7 +214,6 @@ func (app *virtAPIApp) composeSubresources() {
 	for _, version := range v1.SubresourceGroupVersions {
 		subresourcesvmGVR := schema.GroupVersionResource{Group: version.Group, Version: version.Version, Resource: "virtualmachines"}
 		subresourcesvmiGVR := schema.GroupVersionResource{Group: version.Group, Version: version.Version, Resource: "virtualmachineinstances"}
-		expandvmspecGVR := schema.GroupVersionResource{Group: version.Group, Version: version.Version, Resource: "expand-vm-spec"}
 
 		subws := new(restful.WebService)
 		subws.Doc(fmt.Sprintf("KubeVirt \"%s\" Subresource API.", version.Version))
@@ -332,11 +331,7 @@ func (app *virtAPIApp) composeSubresources() {
 			Param(definitions.NamespaceParam(subws)).Param(definitions.NameParam(subws)).
 			Operation(version.Version + "VNC").
 			Doc("Open a websocket connection to connect to VNC on the specified VirtualMachineInstance."))
-		subws.Route(subws.GET(definitions.NamespacedResourcePath(subresourcesvmiGVR) + definitions.SubResourcePath("vnc/screenshot")).
-			To(subresourceApp.VNCScreenshotRequestHandler).
-			Param(definitions.NamespaceParam(subws)).Param(definitions.NameParam(subws)).Param(definitions.MoveCursorParam(subws)).
-			Operation(version.Version + "VNCScreenshot").
-			Doc("Get a PNG VNC screenshot of the specified VirtualMachineInstance."))
+
 		subws.Route(subws.GET(definitions.NamespacedResourcePath(subresourcesvmiGVR) + definitions.SubResourcePath("usbredir")).
 			To(subresourceApp.USBRedirRequestHandler).
 			Param(definitions.NamespaceParam(subws)).
@@ -358,11 +353,6 @@ func (app *virtAPIApp) composeSubresources() {
 			Param(definitions.PortForwardProtocolParameter(subws)).
 			Operation(version.Version + "vmi-PortForwardWithProtocol").
 			Doc("Open a websocket connection forwarding traffic of the specified protocol (either tcp or udp) to the specified VirtualMachineInstance and port."))
-		subws.Route(subws.GET(definitions.NamespacedResourcePath(subresourcesvmiGVR) + definitions.SubResourcePath("vsock")).
-			To(subresourceApp.VSOCKRequestHandler).
-			Param(definitions.NamespaceParam(subws)).Param(definitions.NameParam(subws)).Param(definitions.VSOCKPortParameter(subws)).
-			Operation(version.Version + "VSOCK").
-			Doc("Open a websocket connection forwarding traffic to the specified VirtualMachineInstance and port via VSOCK."))
 
 		// VM endpoint
 		subws.Route(subws.GET(definitions.NamespacedResourcePath(subresourcesvmGVR) + definitions.SubResourcePath("portforward") + definitions.PortPath).
@@ -379,7 +369,7 @@ func (app *virtAPIApp) composeSubresources() {
 			Operation(version.Version + "vm-PortForwardWithProtocol").
 			Doc("Open a websocket connection forwarding traffic of the specified protocol (either tcp or udp) to the specified VirtualMachine and port."))
 
-		subws.Route(subws.PUT(definitions.NamespacedResourceBasePath(expandvmspecGVR)).
+		subws.Route(subws.PUT(definitions.SubResourcePath("expand-spec")).
 			To(subresourceApp.ExpandSpecRequestHandler).
 			Operation(version.Version+"ExpandSpec").
 			Consumes(restful.MIME_JSON).
@@ -521,10 +511,6 @@ func (app *virtAPIApp) composeSubresources() {
 				list.GroupVersion = version.Group + "/" + version.Version
 				list.APIVersion = version.Version
 				list.APIResources = []metav1.APIResource{
-					{
-						Name:       "expand-vm-spec",
-						Namespaced: true,
-					},
 					{
 						Name:       "virtualmachineinstances/vnc",
 						Namespaced: true,
@@ -845,7 +831,7 @@ func (app *virtAPIApp) registerValidatingWebhooks(informers *webhooks.Informers)
 func (app *virtAPIApp) registerMutatingWebhook(informers *webhooks.Informers) {
 
 	http.HandleFunc(components.VMMutatePath, func(w http.ResponseWriter, r *http.Request) {
-		mutating_webhook.ServeVMs(w, r, app.clusterConfig, app.virtCli)
+		mutating_webhook.ServeVMs(w, r, app.clusterConfig)
 	})
 	http.HandleFunc(components.VMIMutatePath, func(w http.ResponseWriter, r *http.Request) {
 		mutating_webhook.ServeVMIs(w, r, app.clusterConfig, informers)
@@ -858,7 +844,7 @@ func (app *virtAPIApp) registerMutatingWebhook(informers *webhooks.Informers) {
 	})
 }
 
-func (app *virtAPIApp) setupTLS(k8sCAManager kvtls.ClientCAManager, kubevirtCAManager kvtls.ClientCAManager) {
+func (app *virtAPIApp) setupTLS(k8sCAManager webhooksutils.ClientCAManager, kubevirtCAManager webhooksutils.ClientCAManager) {
 
 	// A VerifyClientCertIfGiven request means we're not guaranteed
 	// a client has been authenticated unless they provide a peer
@@ -875,8 +861,8 @@ func (app *virtAPIApp) setupTLS(k8sCAManager kvtls.ClientCAManager, kubevirtCAMa
 	// response is given. That status request won't send a peer cert regardless
 	// if the TLS handshake requests it. As a result, the TLS handshake fails
 	// and our aggregated endpoint never becomes available.
-	app.tlsConfig = kvtls.SetupTLSWithCertManager(k8sCAManager, app.certmanager, tls.VerifyClientCertIfGiven, app.clusterConfig)
-	app.handlerTLSConfiguration = kvtls.SetupTLSForVirtHandlerClients(kubevirtCAManager, app.handlerCertManager, app.externallyManaged)
+	app.tlsConfig = webhooksutils.SetupTLSWithCertManager(k8sCAManager, app.certmanager, tls.VerifyClientCertIfGiven)
+	app.handlerTLSConfiguration = webhooksutils.SetupTLSForVirtHandlerClients(kubevirtCAManager, app.handlerCertManager, app.externallyManaged)
 }
 
 func (app *virtAPIApp) startTLS(informerFactory controller.KubeInformerFactory) error {
@@ -894,8 +880,9 @@ func (app *virtAPIApp) startTLS(informerFactory controller.KubeInformerFactory) 
 	authConfigMapInformer := informerFactory.ApiAuthConfigMap()
 	kubevirtCAConfigInformer := informerFactory.KubeVirtCAConfigMap()
 
-	k8sCAManager := kvtls.NewKubernetesClientCAManager(authConfigMapInformer.GetStore())
-	kubevirtCAInformer := kvtls.NewCAManager(kubevirtCAConfigInformer.GetStore(), app.namespace, app.caConfigMapName)
+	k8sCAManager := webhooksutils.NewKubernetesClientCAManager(authConfigMapInformer.GetStore())
+	kubevirtCAInformer := webhooksutils.NewCAManager(kubevirtCAConfigInformer.GetStore(), app.namespace, app.caConfigMapName)
+
 	app.setupTLS(k8sCAManager, kubevirtCAInformer)
 
 	app.Compose()

@@ -49,7 +49,7 @@ load(
 )
 load("@io_bazel_rules_docker//contrib:group.bzl", "group_entry", "group_file")
 load("@io_bazel_rules_docker//contrib:passwd.bzl", "passwd_entry", "passwd_file")
-load("@rules_pkg//:pkg.bzl", "pkg_tar")
+load("@bazel_tools//tools/build_defs/pkg:pkg.bzl", "pkg_tar")
 
 pkg_tar(
     name = "virt-launcher-tar",
@@ -69,6 +69,7 @@ xattrs(
     capabilities = {
         "/usr/bin/virt-launcher": [
             "cap_net_bind_service",
+            "cap_sys_ptrace",
         ],
     },
     selinux_labels = {
@@ -127,8 +128,8 @@ passwd_file(
 pkg_tar(
     name = "libvirt-config",
     srcs = [
+        ":libvirtd.conf",
         ":qemu.conf",
-        ":virtqemud.conf",
     ],
     package_dir = "/etc/libvirt",
 )
@@ -153,18 +154,6 @@ pkg_tar(
     package_dir = "/etc",
 )
 
-# Workaround for https://github.com/moby/moby/issues/44106
-# Need to create the directory upfront, otherwise it gets assigned wrong
-# permissions when unpacked.
-pkg_tar(
-    name = "qemu-kvm-modules-dir-tar",
-    empty_dirs = [
-        "usr/lib64/qemu-kvm",
-    ],
-    mode = "0755",
-    owner = "0.0",
-)
-
 container_image(
     name = "version-container",
     directory = "/",
@@ -174,14 +163,12 @@ container_image(
             ":libvirt-config",
             ":passwd-tar",
             ":nsswitch-tar",
-            ":qemu-kvm-modules-dir-tar",
             "//rpm:launcherbase_aarch64",
         ],
         "//conditions:default": [
             ":libvirt-config",
             ":passwd-tar",
             ":nsswitch-tar",
-            ":qemu-kvm-modules-dir-tar",
             "//rpm:launcherbase_x86_64",
         ],
     }),

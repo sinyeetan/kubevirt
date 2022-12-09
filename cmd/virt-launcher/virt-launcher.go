@@ -114,12 +114,12 @@ func createLibvirtConnection(runWithNonRoot bool) virtcli.Connection {
 	user := ""
 	if runWithNonRoot {
 		user = putil.NonRootUserString
-		libvirtUri = "qemu+unix:///session?socket=/var/run/libvirt/virtqemud-sock"
+		libvirtUri = "qemu+unix:///session?socket=/var/run/libvirt/libvirt-sock"
 	}
 
 	domainConn, err := virtcli.NewConnection(libvirtUri, user, "", 10*time.Second)
 	if err != nil {
-		panic(fmt.Sprintf("failed to connect to virtqemud: %v", err))
+		panic(fmt.Sprintf("failed to connect to libvirtd: %v", err))
 	}
 
 	return domainConn
@@ -328,13 +328,13 @@ func main() {
 	virtShareDir := pflag.String("kubevirt-share-dir", "/var/run/kubevirt", "Shared directory between virt-handler and virt-launcher")
 	ephemeralDiskDir := pflag.String("ephemeral-disk-dir", "/var/run/kubevirt-ephemeral-disks", "Base directory for ephemeral disk data")
 	containerDiskDir := pflag.String("container-disk-dir", "/var/run/kubevirt/container-disks", "Base directory for container disk data")
-	hotplugDiskDir := pflag.String("hotplug-disk-dir", v1.HotplugDiskDir, "Base directory for hotplug disk data")
+	hotplugDiskDir := pflag.String("hotplug-disk-dir", "/var/run/kubevirt/hotplug-disks", "Base directory for hotplug disk data")
 	name := pflag.String("name", "", "Name of the VirtualMachineInstance")
 	uid := pflag.String("uid", "", "UID of the VirtualMachineInstance")
 	namespace := pflag.String("namespace", "", "Namespace of the VirtualMachineInstance")
 	gracePeriodSeconds := pflag.Int("grace-period-seconds", 30, "Grace period to observe before sending SIGTERM to vmi process")
 	allowEmulation := pflag.Bool("allow-emulation", false, "Allow use of software emulation as fallback")
-	runWithNonRoot := pflag.Bool("run-as-nonroot", false, "Run virtqemud with the 'virt' user")
+	runWithNonRoot := pflag.Bool("run-as-nonroot", false, "Run libvirtd with the 'virt' user")
 	hookSidecars := pflag.Uint("hook-sidecars", 0, "Number of requested hook sidecars, virt-launcher will wait for all of them to become available")
 	ovmfPath := pflag.String("ovmf-path", "/usr/share/OVMF", "The directory that contains the EFI roms (like OVMF_CODE.fd)")
 	qemuAgentSysInterval := pflag.Duration("qemu-agent-sys-interval", 120*time.Second, "Interval between consecutive qemu agent calls for sys commands")
@@ -383,7 +383,7 @@ func main() {
 		panic(err)
 	}
 
-	// Start virtqemud, virtlogd, and establish libvirt connection
+	// Start libvirtd, virtlogd, and establish libvirt connection
 	stopChan := make(chan struct{})
 
 	l := util.NewLibvirtWrapper(*runWithNonRoot)
@@ -392,7 +392,7 @@ func main() {
 		panic(err)
 	}
 
-	l.StartVirtquemud(stopChan)
+	l.StartLibvirt(stopChan)
 	// only single domain should be present
 	domainName := api.VMINamespaceKeyFunc(vmi)
 

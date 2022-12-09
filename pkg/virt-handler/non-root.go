@@ -1,8 +1,8 @@
 package virthandler
 
 import (
-	"errors"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -70,7 +70,7 @@ func changeOwnershipOfHostDisks(vmiWithAllPVCs *v1.VirtualMachineInstance, res i
 
 			_, err := os.Stat(diskPath)
 			if err != nil {
-				if errors.Is(err, os.ErrNotExist) {
+				if os.IsNotExist(err) {
 					diskDir := hostdisk.GetMountedHostDiskDir(volumeName)
 					path, err := isolation.SafeJoin(res, diskDir)
 					if err != nil {
@@ -136,7 +136,7 @@ func (d *VirtualMachineController) prepareTap(vmi *v1.VirtualMachineInstance, re
 				return 0, err
 			}
 			defer df.Close()
-			b, err := os.ReadFile(df.SafePath())
+			b, err := ioutil.ReadFile(df.SafePath())
 			if err != nil {
 				return 0, fmt.Errorf("Failed to read if index, %v", err)
 			}
@@ -163,13 +163,13 @@ func (d *VirtualMachineController) prepareTap(vmi *v1.VirtualMachineInstance, re
 func (*VirtualMachineController) prepareVFIO(vmi *v1.VirtualMachineInstance, res isolation.IsolationResult) error {
 	vfioBasePath, err := isolation.SafeJoin(res, "dev", "vfio")
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if os.IsNotExist(err) {
 			return nil
 		}
 	}
 	vfioPath, err := safepath.JoinNoFollow(vfioBasePath, "vfio")
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if os.IsNotExist(err) {
 			return nil
 		}
 	}

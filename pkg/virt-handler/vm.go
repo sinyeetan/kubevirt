@@ -30,16 +30,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"kubevirt.io/kubevirt/pkg/virt-controller/watch/topology"
-	"kubevirt.io/kubevirt/pkg/virt-handler/selinux"
 
 	hotplugdisk "kubevirt.io/kubevirt/pkg/hotplug-disk"
 	"kubevirt.io/kubevirt/pkg/safepath"
-	"kubevirt.io/kubevirt/pkg/virt-controller/services"
 	"kubevirt.io/kubevirt/pkg/virt-handler/cgroup"
 
 	"kubevirt.io/kubevirt/pkg/config"
@@ -70,8 +67,6 @@ import (
 	container_disk "kubevirt.io/kubevirt/pkg/virt-handler/container-disk"
 	device_manager "kubevirt.io/kubevirt/pkg/virt-handler/device-manager"
 	hotplug_volume "kubevirt.io/kubevirt/pkg/virt-handler/hotplug-disk"
-
-	ps "github.com/mitchellh/go-ps"
 
 	v1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/kubecli"
@@ -177,7 +172,6 @@ func NewController(
 	migrationIpAddress string,
 	virtShareDir string,
 	virtPrivateDir string,
-	kubeletPodsDir string,
 	vmiSourceInformer cache.SharedIndexInformer,
 	vmiTargetInformer cache.SharedIndexInformer,
 	domainInformer cache.SharedInformer,
@@ -209,7 +203,7 @@ func NewController(
 		migrationProxy:              migrationProxy,
 		podIsolationDetector:        podIsolationDetector,
 		containerDiskMounter:        container_disk.NewMounter(podIsolationDetector, filepath.Join(virtPrivateDir, "container-disk-mount-state"), clusterConfig),
-		hotplugVolumeMounter:        hotplug_volume.NewVolumeMounter(filepath.Join(virtPrivateDir, "hotplug-volume-mount-state"), kubeletPodsDir),
+		hotplugVolumeMounter:        hotplug_volume.NewVolumeMounter(filepath.Join(virtPrivateDir, "hotplug-volume-mount-state")),
 		clusterConfig:               clusterConfig,
 		virtLauncherFSRunDirPattern: "/proc/%d/root/var/run",
 		capabilities:                capabilities,
@@ -253,7 +247,7 @@ func NewController(
 	if cgroups.IsCgroup2UnifiedMode() {
 		// Need 'rwm' permissions otherwise ebpf filtering program attached by runc
 		// will deny probing the device file with 'access' syscall. That in turn
-		// will lead to virtqemud failure on VM startup.
+		// will lead to libvirtd failure on VM startup.
 		// This has been fixed upstream:
 		//   https://github.com/opencontainers/runc/pull/2796
 		// but the workaround is still needed to support previous versions without
@@ -1172,24 +1166,6 @@ func (d *VirtualMachineController) updateIsoSizeStatus(vmi *v1.VirtualMachineIns
 	}
 }
 
-func (d *VirtualMachineController) updateSELinuxContext(vmi *v1.VirtualMachineInstance) error {
-	_, present, err := selinux.NewSELinux()
-	if err != nil {
-		return err
-	}
-	if present {
-		context, err := selinux.GetVirtLauncherContext(vmi)
-		if err != nil {
-			return err
-		}
-		vmi.Status.SelinuxContext = context
-	} else {
-		vmi.Status.SelinuxContext = "none"
-	}
-
-	return nil
-}
-
 func (d *VirtualMachineController) updateVMIStatus(origVMI *v1.VirtualMachineInstance, domain *api.Domain, syncError error) (err error) {
 	condManager := controller.NewVirtualMachineInstanceConditionManager()
 
@@ -1209,10 +1185,6 @@ func (d *VirtualMachineController) updateVMIStatus(origVMI *v1.VirtualMachineIns
 
 	// Update VMI status fields based on what is reported on the domain
 	d.updateIsoSizeStatus(vmi)
-	err = d.updateSELinuxContext(vmi)
-	if err != nil {
-		log.Log.Reason(err).Errorf("couldn't find the SELinux context for %s", vmi.Name)
-	}
 	d.setMigrationProgressStatus(vmi, domain)
 	d.updateGuestInfoFromDomain(vmi, domain)
 	d.updateVolumeStatusesFromDomain(vmi, domain)
@@ -1399,10 +1371,6 @@ func (d *VirtualMachineController) calculateLiveMigrationCondition(vmi *v1.Virtu
 		return newNonMigratableCondition(tscRequirement.Reason, v1.VirtualMachineInstanceReasonNoTSCFrequencyMigratable), isBlockMigration
 	}
 
-	if vmi.IsCPUDedicated() && vmi.Spec.Domain.CPU.IsolateEmulatorThread {
-		return newNonMigratableCondition("VMI uses dedicated CPUs and emulator thread isolation", v1.VirtualMachineInstanceReasonDedicatedCPU), isBlockMigration
-	}
-
 	return &v1.VirtualMachineInstanceCondition{
 		Type:   v1.VirtualMachineInstanceIsMigratable,
 		Status: k8sv1.ConditionTrue,
@@ -1416,6 +1384,7 @@ func vmiContainsPCIHostDevice(vmi *v1.VirtualMachineInstance) bool {
 func (c *VirtualMachineController) Run(threadiness int, stopCh chan struct{}) {
 	defer c.Queue.ShutDown()
 	log.Log.Info("Starting virt-handler controller.")
+	log.Log.Info("=======================virt-handler/vm.go run.====================================")
 
 	go c.deviceManagerController.Run(stopCh)
 
@@ -1438,11 +1407,7 @@ func (c *VirtualMachineController) Run(threadiness int, stopCh chan struct{}) {
 		}
 	}
 
-	heartBeatDone := make(chan struct{})
-	go func() {
-		c.heartBeat.Run(c.heartBeatInterval, stopCh)
-		close(heartBeatDone)
-	}()
+	go c.heartBeat.Run(c.heartBeatInterval, stopCh)
 
 	// Start the actual work
 	for i := 0; i < threadiness; i++ {
@@ -1450,13 +1415,13 @@ func (c *VirtualMachineController) Run(threadiness int, stopCh chan struct{}) {
 	}
 
 	<-stopCh
-	<-heartBeatDone
 	log.Log.Info("Stopping virt-handler controller.")
 }
 
 func (c *VirtualMachineController) runWorker() {
 	for c.Execute() {
 	}
+
 }
 
 func (c *VirtualMachineController) Execute() bool {
@@ -2362,7 +2327,7 @@ func (d *VirtualMachineController) handleTargetMigrationProxy(vmi *v1.VirtualMac
 	}
 
 	// Get the libvirt connection socket file on the destination pod.
-	socketFile := fmt.Sprintf(filepath.Join(d.virtLauncherFSRunDirPattern, "libvirt/virtqemud-sock"), res.Pid())
+	socketFile := fmt.Sprintf(filepath.Join(d.virtLauncherFSRunDirPattern, "libvirt/libvirt-sock"), res.Pid())
 	// the migration-proxy is no longer shared via host mount, so we
 	// pass in the virt-launcher's baseDir to reach the unix sockets.
 	baseDir := fmt.Sprintf(filepath.Join(d.virtLauncherFSRunDirPattern, "kubevirt"), res.Pid())
@@ -2573,11 +2538,6 @@ func (d *VirtualMachineController) vmUpdateHelperMigrationTarget(origVMI *v1.Vir
 	if err != nil {
 		return fmt.Errorf("failed to set up file ownership for /dev/kvm: %v", err)
 	}
-	if virtutil.IsAutoAttachVSOCK(vmi) {
-		if err := d.claimDeviceOwnership(virtLauncherRootMount, "vhost-vsock"); err != nil {
-			return fmt.Errorf("failed to set up file ownership for /dev/vhost-vsock: %v", err)
-		}
-	}
 
 	lessPVCSpaceToleration := d.clusterConfig.GetLessPVCSpaceToleration()
 	minimumPVCReserveBytes := d.clusterConfig.GetMinimumReservePVCBytes()
@@ -2607,76 +2567,6 @@ func (d *VirtualMachineController) vmUpdateHelperMigrationTarget(origVMI *v1.Vir
 	}
 	return nil
 }
-
-func (d *VirtualMachineController) configureHousekeepingCgroup(vmi *v1.VirtualMachineInstance) error {
-	cgroupManager, err := cgroup.NewManagerFromVM(vmi)
-	if err != nil {
-		return err
-	}
-
-	err = cgroupManager.CreateChildCgroup("housekeeping", "cpuset")
-	if err != nil {
-		log.Log.Reason(err).Error("CreateChildCgroup ")
-		return err
-	}
-
-	key := controller.VirtualMachineInstanceKey(vmi)
-	domain, domainExists, _, err := d.getDomainFromCache(key)
-	if err != nil {
-		return err
-	}
-	// bail out if domain does not exist
-	if domainExists == false {
-		return nil
-	}
-
-	if domain.Spec.CPUTune == nil || domain.Spec.CPUTune.EmulatorPin == nil {
-		return nil
-	}
-
-	hkcpu, err := strconv.Atoi(domain.Spec.CPUTune.EmulatorPin.CPUSet)
-	if err != nil {
-		return err
-	}
-
-	log.Log.V(3).Object(vmi).Infof("housekeeping cpu: %v", hkcpu)
-
-	err = cgroupManager.SetCpuSet("housekeeping", []int{hkcpu})
-	if err != nil {
-		return err
-	}
-
-	tids, err := cgroupManager.GetCgroupThreads()
-	if err != nil {
-		return err
-	}
-	hktids := make([]int, 0, 10)
-
-	for _, tid := range tids {
-		proc, err := ps.FindProcess(tid)
-		if err != nil {
-			log.Log.Object(vmi).Errorf("Failure to find process: %s", err.Error())
-			return err
-		}
-		comm := proc.Executable()
-		if strings.Contains(comm, "CPU ") && strings.Contains(comm, "KVM") {
-			continue
-		}
-		hktids = append(hktids, tid)
-	}
-
-	log.Log.V(3).Object(vmi).Infof("hk thread ids: %v", hktids)
-	for _, tid := range hktids {
-		err = cgroupManager.AttachTID("cpuset", "housekeeping", tid)
-		if err != nil {
-			log.Log.Object(vmi).Errorf("Error attaching tid %d: %v", tid, err.Error())
-			return err
-		}
-	}
-
-	return nil
-}
-
 func (d *VirtualMachineController) vmUpdateHelperDefault(origVMI *v1.VirtualMachineInstance, domainExists bool) error {
 	client, err := d.getLauncherClient(origVMI)
 	if err != nil {
@@ -2736,11 +2626,6 @@ func (d *VirtualMachineController) vmUpdateHelperDefault(origVMI *v1.VirtualMach
 		if err != nil {
 			return fmt.Errorf("failed to set up file ownership for /dev/kvm: %v", err)
 		}
-		if virtutil.IsAutoAttachVSOCK(vmi) {
-			if err := d.claimDeviceOwnership(virtLauncherRootMount, "vhost-vsock"); err != nil {
-				return fmt.Errorf("failed to set up file ownership for /dev/vhost-vsock: %v", err)
-			}
-		}
 
 		lessPVCSpaceToleration := d.clusterConfig.GetLessPVCSpaceToleration()
 		minimumPVCReserveBytes := d.clusterConfig.GetMinimumReservePVCBytes()
@@ -2764,15 +2649,6 @@ func (d *VirtualMachineController) vmUpdateHelperDefault(origVMI *v1.VirtualMach
 
 		if virtutil.IsNonRootVMI(vmi) {
 			if err := d.nonRootSetup(origVMI, vmi); err != nil {
-				return err
-			}
-		}
-		for _, fs := range vmi.Spec.Domain.Devices.Filesystems {
-			socketPath, err := isolation.SafeJoin(isolationRes, services.VirtioFSSocketPath(fs.Name))
-			if err != nil {
-				return err
-			}
-			if err := diskutils.DefaultOwnershipManager.SetFileOwnership(socketPath); err != nil {
 				return err
 			}
 		}
@@ -2808,13 +2684,6 @@ func (d *VirtualMachineController) vmUpdateHelperDefault(origVMI *v1.VirtualMach
 			return &virtLauncherCriticalSecurebootError{fmt.Sprintf("mismatch of Secure Boot setting and bootloaders: %v", err)}
 		}
 		return err
-	}
-
-	if vmi.IsCPUDedicated() && vmi.Spec.Domain.CPU.IsolateEmulatorThread {
-		err = d.configureHousekeepingCgroup(vmi)
-		if err != nil {
-			return err
-		}
 	}
 
 	if !domainExists {

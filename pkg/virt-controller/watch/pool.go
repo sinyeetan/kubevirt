@@ -341,7 +341,6 @@ func (c *PoolController) enqueuePool(obj interface{}) {
 	key, err := controller.KeyFunc(pool)
 	if err != nil {
 		logger.Object(pool).Reason(err).Error("Failed to extract key from pool.")
-		return
 	}
 
 	// Delay prevents pool from being reconciled too often

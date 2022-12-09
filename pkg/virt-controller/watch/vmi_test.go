@@ -56,7 +56,6 @@ import (
 
 	kvcontroller "kubevirt.io/kubevirt/pkg/controller"
 	"kubevirt.io/kubevirt/pkg/network/sriov"
-	storagetypes "kubevirt.io/kubevirt/pkg/storage/types"
 	"kubevirt.io/kubevirt/pkg/testutils"
 	"kubevirt.io/kubevirt/pkg/virt-controller/services"
 	"kubevirt.io/kubevirt/pkg/virt-controller/watch/topology"
@@ -81,7 +80,6 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 	var kubeClient *fake.Clientset
 	var networkClient *fakenetworkclient.Clientset
 	var pvcInformer cache.SharedIndexInformer
-	var namespaceStore cache.Store
 
 	var dataVolumeSource *framework.FakeControllerSource
 	var dataVolumeInformer cache.SharedIndexInformer
@@ -253,7 +251,6 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 		pvcInformer, _ = testutils.NewFakeInformerFor(&k8sv1.PersistentVolumeClaim{})
 		cdiInformer, _ = testutils.NewFakeInformerFor(&cdiv1.CDIConfig{})
 		cdiConfigInformer, _ = testutils.NewFakeInformerFor(&cdiv1.CDIConfig{})
-		namespaceStore = cache.NewStore(cache.DeletionHandlingMetaNamespaceKeyFunc)
 		controller = NewVMIController(
 			services.NewTemplateService("a", 240, "b", "c", "d", "e", "f", "g", pvcInformer.GetStore(), virtClient, config, qemuGid, "h"),
 			vmiInformer,
@@ -267,8 +264,6 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 			cdiConfigInformer,
 			config,
 			topology.NewTopologyHinter(&cache.FakeCustomStore{}, &cache.FakeCustomStore{}, "amd64", config),
-			namespaceStore,
-			false,
 		)
 		// Wrap our workqueue to have a way to detect when we are done processing updates
 		mockQueue = testutils.NewMockWorkQueue(controller.Queue)
@@ -1310,7 +1305,7 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 			}
 		},
 			Entry("should hand over pods if both are ready and running", k8sv1.PodRunning, virtv1.Scheduled),
-			Entry("should hand over pods even if the attachment pod is not ready and running", k8sv1.PodPending, virtv1.Scheduled),
+			Entry("should not hand over pods if the attachment pod is not ready and running", k8sv1.PodPending, virtv1.Scheduling),
 		)
 
 		It("should ignore migration target pods", func() {
@@ -2136,7 +2131,6 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 
 		It("CreateAttachmentPodTemplate should create a pod template if DV of owning PVC is ready", func() {
 			vmi := NewPendingVirtualMachine("testvmi")
-			vmi.Status.SelinuxContext = "system_u:system_r:container_file_t:s0:c1,c2"
 			virtlauncherPod := NewPodForVirtualMachine(vmi, k8sv1.PodRunning)
 			pvc := NewHotplugPVC("test-dv", vmi.Namespace, k8sv1.ClaimBound)
 			Expect(pvcInformer.GetIndexer().Add(pvc)).To(Succeed())
@@ -2486,7 +2480,8 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 		makeVolumeStatusesForUpdateWithMessage := func(podName, podUID string, phase virtv1.VolumePhase, message, reason string, indexes ...int) []virtv1.VolumeStatus {
 			res := make([]virtv1.VolumeStatus, 0)
 			for _, index := range indexes {
-				fsOverhead := storagetypes.DefaultFSOverhead
+				var fsOverhead cdiv1.Percent
+				fsOverhead = "0.055"
 				res = append(res, virtv1.VolumeStatus{
 					Name: fmt.Sprintf("volume%d", index),
 					HotplugVolume: &virtv1.HotplugVolumeStatus{
@@ -2595,7 +2590,7 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 				[]string{SuccessfulCreatePodReason}),
 		)
 
-		It("Should get default filesystem overhead if there are multiple CDI instances", func() {
+		It("Should fail to get filesystem overhead if there are multiple CDI instances", func() {
 			cdi := cdiv1.CDI{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "testCDI1",
@@ -2610,15 +2605,17 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 			Expect(cdiInformer.GetIndexer().Add(&cdi)).To(Succeed())
 			Expect(cdiInformer.GetIndexer().Add(&cdi2)).To(Succeed())
 
-			fsOverhead, err := controller.getFilesystemOverhead(&k8sv1.PersistentVolumeClaim{})
-			Expect(err).ToNot(HaveOccurred())
-			Expect(fsOverhead).To(Equal(storagetypes.DefaultFSOverhead))
+			fsOverhead, err := controller.getFilesystemOverhead(nil)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(Equal(multipleCdiInstances.Error()))
+			Expect(fsOverhead).To(Equal(cdiv1.Percent("0")))
 		})
 
-		It("Should get default filesystem overhead if there is no CDI available", func() {
-			fsOverhead, err := controller.getFilesystemOverhead(&k8sv1.PersistentVolumeClaim{})
-			Expect(err).ToNot(HaveOccurred())
-			Expect(fsOverhead).To(Equal(storagetypes.DefaultFSOverhead))
+		It("Should fail to get filesystem overhead if there is no CDI available", func() {
+			fsOverhead, err := controller.getFilesystemOverhead(nil)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(Equal(failedToFindCdi.Error()))
+			Expect(fsOverhead).To(Equal(cdiv1.Percent("0")))
 		})
 
 		It("Should fail to get filesystem overhead if there's no valid CDI config available", func() {
@@ -2730,7 +2727,6 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 				Target: "",
 			})
 			vmi.Status.ActivePods["virt-launch-uid"] = ""
-			vmi.Status.SelinuxContext = "system_u:system_r:container_file_t:s0:c1,c2"
 			virtlauncherPod := NewPodForVirtualMachine(vmi, k8sv1.PodRunning)
 
 			existingPVC := &k8sv1.PersistentVolumeClaim{
@@ -2869,40 +2865,15 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 
 	Context("topology hints", func() {
 
-		getVmiWithInvTsc := func() *virtv1.VirtualMachineInstance {
-			vmi := NewPendingVirtualMachine("testvmi")
-			vmi.Spec.Domain.CPU = &v1.CPU{
-				Features: []virtv1.CPUFeature{
-					{
-						Name:   "invtsc",
-						Policy: "require",
-					},
-				},
-			}
-
-			return vmi
-		}
-
-		getVmiWithReenlightenment := func() *virtv1.VirtualMachineInstance {
-			vmi := NewPendingVirtualMachine("testvmi")
-			vmi.Spec.Domain.Features = &v1.Features{
-				Hyperv: &v1.FeatureHyperv{
-					Reenlightenment: &v1.FeatureState{Enabled: pointer.Bool(true)},
-				},
-			}
-
-			return vmi
-		}
-
-		expectTopologyHintsUpdate := func() {
-			var vmi *virtv1.VirtualMachineInstance
-			vmiInterface.EXPECT().Update(gomock.Any()).Do(func(arg interface{}) {
-				vmi = arg.(*virtv1.VirtualMachineInstance)
-				Expect(topology.AreTSCFrequencyTopologyHintsDefined(vmi)).To(BeTrue())
-			}).Return(vmi, nil)
-		}
-
 		Context("needs to be set when", func() {
+
+			expectTopologyHintsUpdate := func() {
+				var vmi *virtv1.VirtualMachineInstance
+				vmiInterface.EXPECT().Update(gomock.Any()).Do(func(arg interface{}) {
+					vmi = arg.(*virtv1.VirtualMachineInstance)
+					Expect(topology.AreTSCFrequencyTopologyHintsDefined(vmi)).To(BeTrue())
+				}).Return(vmi, nil)
+			}
 
 			runController := func(vmi *virtv1.VirtualMachineInstance) {
 				addVirtualMachine(vmi)
@@ -2911,7 +2882,15 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 			}
 
 			It("invtsc feature exists", func() {
-				vmi := getVmiWithInvTsc()
+				vmi := NewPendingVirtualMachine("testvmi")
+				vmi.Spec.Domain.CPU = &v1.CPU{
+					Features: []virtv1.CPUFeature{
+						{
+							Name:   "invtsc",
+							Policy: "require",
+						},
+					},
+				}
 
 				expectTopologyHintsUpdate()
 				runController(vmi)
@@ -2921,13 +2900,20 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 				var vmi *v1.VirtualMachineInstance
 
 				BeforeEach(func() {
-					vmi = getVmiWithReenlightenment()
+					vmi = NewPendingVirtualMachine("testvmi")
+					vmi.Spec.Domain.Features = &v1.Features{
+						Hyperv: &v1.FeatureHyperv{
+							Reenlightenment: &v1.FeatureState{Enabled: pointer.Bool(true)},
+						},
+					}
 				})
 
 				When("TSC frequency is exposed", func() {
 					It("topology hints need to be set", func() {
 						expectTopologyHintsUpdate()
 						runController(vmi)
+
+						testutils.ExpectEvent(recorder, SuccessfulCreatePodReason)
 					})
 				})
 
@@ -2935,7 +2921,7 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 					unexposeTscFrequency := func(requirement topology.TscFrequencyRequirementType) {
 						mockHinter := topology.NewMockHinter(ctrl)
 						mockHinter.EXPECT().TopologyHintsForVMI(gomock.Any()).Return(nil, requirement, fmt.Errorf("tsc frequency is not exposed on the cluster")).AnyTimes()
-						mockHinter.EXPECT().IsTscFrequencyRequired(gomock.Any()).Return(requirement == topology.RequiredForBoot)
+						mockHinter.EXPECT().IsTscFrequencyRequiredForBoot(gomock.Any()).Return(requirement == topology.RequiredForBoot)
 						controller.topologyHinter = mockHinter
 					}
 
@@ -2950,74 +2936,6 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 
 			})
 
-		})
-
-		Context("pod creation", func() {
-
-			runController := func(vmi *virtv1.VirtualMachineInstance) {
-				addVirtualMachine(vmi)
-				controller.Execute()
-			}
-
-			It("does not need to happen if tsc requiredment is of type RequiredForBoot", func() {
-				vmi := getVmiWithInvTsc()
-				Expect(topology.GetTscFrequencyRequirement(vmi).Type).To(Equal(topology.RequiredForBoot))
-
-				expectTopologyHintsUpdate()
-				runController(vmi)
-			})
-
-			It("does not need to happen if tsc requiredment is of type RequiredForMigration", func() {
-				vmi := getVmiWithReenlightenment()
-				Expect(topology.GetTscFrequencyRequirement(vmi).Type).To(Equal(topology.RequiredForMigration))
-
-				expectTopologyHintsUpdate()
-				runController(vmi)
-			})
-
-			It("does not need to happen if tsc requiredment is of type NotRequired", func() {
-				vmi := NewPendingVirtualMachine("testvmi")
-				Expect(topology.GetTscFrequencyRequirement(vmi).Type).To(Equal(topology.NotRequired))
-
-				shouldExpectPodCreation(vmi.UID)
-				runController(vmi)
-				testutils.ExpectEvent(recorder, SuccessfulCreatePodReason)
-			})
-		})
-	})
-
-	Context("auto attach VSOCK", func() {
-		It("should allocate CID when VirtualMachineInstance is scheduled", func() {
-			vmi := NewPendingVirtualMachine("testvmi")
-			setReadyCondition(vmi, k8sv1.ConditionFalse, virtv1.GuestNotRunningReason)
-			vmi.Status.Phase = virtv1.Scheduling
-			vmi.Spec.Domain.Devices.AutoattachVSOCK = pointer.Bool(true)
-			pod := NewPodForVirtualMachine(vmi, k8sv1.PodRunning)
-
-			addVirtualMachine(vmi)
-			podFeeder.Add(pod)
-
-			vmiInterface.EXPECT().Update(gomock.Any()).Do(func(arg *virtv1.VirtualMachineInstance) {
-				Expect(arg.Status.Phase).To(Equal(virtv1.Scheduled))
-				Expect(arg.Status.PhaseTransitionTimestamps).ToNot(BeEmpty())
-				Expect(arg.Status.PhaseTransitionTimestamps).ToNot(HaveLen(len(vmi.Status.PhaseTransitionTimestamps)))
-				Expect(arg.Status.VSOCKCID).NotTo(BeNil())
-			}).Return(vmi, nil)
-			controller.Execute()
-		})
-
-		It("should recycle the CID when the pods are deleted", func() {
-			vmi := NewPendingVirtualMachine("testvmi")
-			vmi.Spec.Domain.Devices.AutoattachVSOCK = pointer.Bool(true)
-			Expect(controller.cidsMap.Allocate(vmi)).To(Succeed())
-			vmi.Status.Phase = virtv1.Succeeded
-			addVirtualMachine(vmi)
-
-			Expect(vmiInformer.GetIndexer().Delete(vmi)).To(Succeed())
-			controller.Execute()
-
-			Expect(controller.cidsMap.cids).To(BeEmpty())
-			Expect(controller.cidsMap.reverse).To(BeEmpty())
 		})
 	})
 })

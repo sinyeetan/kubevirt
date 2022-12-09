@@ -136,7 +136,6 @@ func (ctrl *VMSnapshotController) Init() {
 		cache.ResourceEventHandlerFuncs{
 			AddFunc:    ctrl.handleVMSnapshotContent,
 			UpdateFunc: func(oldObj, newObj interface{}) { ctrl.handleVMSnapshotContent(newObj) },
-			DeleteFunc: ctrl.handleVMSnapshotContent,
 		},
 		ctrl.ResyncPeriod,
 	)

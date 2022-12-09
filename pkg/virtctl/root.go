@@ -18,7 +18,6 @@ import (
 	"kubevirt.io/kubevirt/pkg/virtctl/expose"
 	"kubevirt.io/kubevirt/pkg/virtctl/guestfs"
 	"kubevirt.io/kubevirt/pkg/virtctl/imageupload"
-	"kubevirt.io/kubevirt/pkg/virtctl/memorydump"
 	"kubevirt.io/kubevirt/pkg/virtctl/pause"
 	"kubevirt.io/kubevirt/pkg/virtctl/portforward"
 	"kubevirt.io/kubevirt/pkg/virtctl/scp"
@@ -28,7 +27,6 @@ import (
 	"kubevirt.io/kubevirt/pkg/virtctl/usbredir"
 	"kubevirt.io/kubevirt/pkg/virtctl/version"
 	"kubevirt.io/kubevirt/pkg/virtctl/vm"
-	"kubevirt.io/kubevirt/pkg/virtctl/vmexport"
 	"kubevirt.io/kubevirt/pkg/virtctl/vnc"
 )
 
@@ -96,7 +94,7 @@ func NewVirtctlCommand() (*cobra.Command, clientcmd.ClientConfig) {
 		vm.NewFSListCommand(clientConfig),
 		vm.NewAddVolumeCommand(clientConfig),
 		vm.NewRemoveVolumeCommand(clientConfig),
-		memorydump.NewMemoryDumpCommand(clientConfig),
+		vm.NewMemoryDumpCommand(clientConfig),
 		pause.NewPauseCommand(clientConfig),
 		pause.NewUnpauseCommand(clientConfig),
 		softreboot.NewSoftRebootCommand(clientConfig),
@@ -104,7 +102,6 @@ func NewVirtctlCommand() (*cobra.Command, clientcmd.ClientConfig) {
 		version.VersionCommand(clientConfig),
 		imageupload.NewImageUploadCommand(clientConfig),
 		guestfs.NewGuestfsShellCommand(clientConfig),
-		vmexport.NewVirtualMachineExportCommand(clientConfig),
 		optionsCmd,
 	)
 	return rootCmd, clientConfig

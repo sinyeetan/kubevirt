@@ -384,11 +384,11 @@ func ExtractImageIDsFromSourcePod(vmi *v1.VirtualMachineInstance, sourcePod *kub
 		if volume.ContainerDisk == nil {
 			continue
 		}
-		imageIDs[volume.Name] = volume.ContainerDisk.Image
+		imageIDs[volume.Name] = ""
 	}
 
 	if util.HasKernelBootContainerImage(vmi) {
-		imageIDs[KernelBootVolumeName] = vmi.Spec.Domain.Firmware.KernelBoot.Container.Image
+		imageIDs[KernelBootVolumeName] = ""
 	}
 
 	for _, status := range sourcePod.Status.ContainerStatuses {
@@ -396,11 +396,10 @@ func ExtractImageIDsFromSourcePod(vmi *v1.VirtualMachineInstance, sourcePod *kub
 			continue
 		}
 		key := toVolumeName(status.Name)
-		image, exists := imageIDs[key]
-		if !exists {
+		if _, exists := imageIDs[key]; !exists {
 			continue
 		}
-		imageID, err := toImageWithDigest(image, status.ImageID)
+		imageID, err := toImageWithDigest(status.Image, status.ImageID)
 		if err != nil {
 			return nil, err
 		}

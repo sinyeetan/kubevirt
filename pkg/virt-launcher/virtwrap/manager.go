@@ -28,8 +28,8 @@ package virtwrap
 import (
 	"context"
 	"encoding/xml"
-	"errors"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -115,9 +115,9 @@ type DomainManager interface {
 	PrepareMigrationTarget(*v1.VirtualMachineInstance, bool, *cmdv1.VirtualMachineOptions) error
 	GetDomainStats() ([]*stats.DomainStats, error)
 	CancelVMIMigration(*v1.VirtualMachineInstance) error
-	GetGuestInfo() v1.VirtualMachineInstanceGuestAgentInfo
-	GetUsers() []v1.VirtualMachineInstanceGuestOSUser
-	GetFilesystems() []v1.VirtualMachineInstanceFileSystem
+	GetGuestInfo() (v1.VirtualMachineInstanceGuestAgentInfo, error)
+	GetUsers() ([]v1.VirtualMachineInstanceGuestOSUser, error)
+	GetFilesystems() ([]v1.VirtualMachineInstanceFileSystem, error)
 	FinalizeVirtualMachineMigration(*v1.VirtualMachineInstance) error
 	HotplugHostDevices(vmi *v1.VirtualMachineInstance) error
 	InterfacesStatus() []api.InterfaceStatus
@@ -990,7 +990,7 @@ var checkIfDiskReadyToUse = checkIfDiskReadyToUseFunc
 func checkIfDiskReadyToUseFunc(filename string) (bool, error) {
 	info, err := os.Stat(filename)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if os.IsNotExist(err) {
 			return false, nil
 		}
 		log.DefaultLogger().V(1).Infof("stat error: %v", err)
@@ -1018,10 +1018,6 @@ func checkIfDiskReadyToUseFunc(filename string) (bool, error) {
 	return true, nil
 }
 
-func isHotplugDisk(disk api.Disk) bool {
-	return strings.HasPrefix(getSourceFile(disk), v1.HotplugDiskDir)
-}
-
 func getDetachedDisks(oldDisks, newDisks []api.Disk) []api.Disk {
 	newDiskMap := make(map[string]api.Disk)
 	for _, disk := range newDisks {
@@ -1032,9 +1028,6 @@ func getDetachedDisks(oldDisks, newDisks []api.Disk) []api.Disk {
 	}
 	res := make([]api.Disk, 0)
 	for _, oldDisk := range oldDisks {
-		if !isHotplugDisk(oldDisk) {
-			continue
-		}
 		if _, ok := newDiskMap[getSourceFile(oldDisk)]; !ok {
 			// This disk got detached, add it to the list
 			res = append(res, oldDisk)
@@ -1053,9 +1046,6 @@ func getAttachedDisks(oldDisks, newDisks []api.Disk) []api.Disk {
 	}
 	res := make([]api.Disk, 0)
 	for _, newDisk := range newDisks {
-		if !isHotplugDisk(newDisk) {
-			continue
-		}
 		if _, ok := oldDiskMap[getSourceFile(newDisk)]; !ok {
 			// This disk got attached, add it to the list
 			res = append(res, newDisk)
@@ -1089,7 +1079,7 @@ func isBlockDeviceVolumeFunc(volumeName string) (bool, error) {
 		}
 		return false, fmt.Errorf("found %v, but it's not a block device", path)
 	}
-	if errors.Is(err, os.ErrNotExist) {
+	if os.IsNotExist(err) {
 		// cross check: is it a filesystem volume
 		path = converter.GetFilesystemVolumePath(volumeName)
 		fileInfo, err := os.Stat(path)
@@ -1099,7 +1089,7 @@ func isBlockDeviceVolumeFunc(volumeName string) (bool, error) {
 			}
 			return false, fmt.Errorf("found %v, but it's not a regular file", path)
 		}
-		if errors.Is(err, os.ErrNotExist) {
+		if os.IsNotExist(err) {
 			return false, fmt.Errorf("neither found block device nor regular file for volume %v", volumeName)
 		}
 	}
@@ -1141,7 +1131,7 @@ func (l *LibvirtDomainManager) getDomainSpec(dom cli.VirDomain) (*api.DomainSpec
 }
 
 func removePreviousMemoryDump(dir string) {
-	files, err := os.ReadDir(dir)
+	files, err := ioutil.ReadDir(dir)
 	if err != nil {
 		log.Log.Reason(err).Errorf("failed to remove older memory dumps")
 		return
@@ -1831,7 +1821,7 @@ func (l *LibvirtDomainManager) buildDevicesMetadata(vmi *v1.VirtualMachineInstan
 }
 
 // GetGuestInfo queries the agent store and return the aggregated data from Guest agent
-func (l *LibvirtDomainManager) GetGuestInfo() v1.VirtualMachineInstanceGuestAgentInfo {
+func (l *LibvirtDomainManager) GetGuestInfo() (v1.VirtualMachineInstanceGuestAgentInfo, error) {
 	sysInfo := l.agentData.GetSysInfo()
 	fsInfo := l.agentData.GetFS(10)
 	userInfo := l.agentData.GetUsers(10)
@@ -1875,7 +1865,7 @@ func (l *LibvirtDomainManager) GetGuestInfo() v1.VirtualMachineInstanceGuestAgen
 		})
 	}
 
-	return guestInfo
+	return guestInfo, nil
 }
 
 // InterfacesStatus returns the interfaces Guest Agent reported
@@ -1889,7 +1879,7 @@ func (l *LibvirtDomainManager) GetGuestOSInfo() *api.GuestOSInfo {
 }
 
 // GetUsers return the full list of users on the guest machine
-func (l *LibvirtDomainManager) GetUsers() []v1.VirtualMachineInstanceGuestOSUser {
+func (l *LibvirtDomainManager) GetUsers() ([]v1.VirtualMachineInstanceGuestOSUser, error) {
 	userInfo := l.agentData.GetUsers(-1)
 	userList := []v1.VirtualMachineInstanceGuestOSUser{}
 
@@ -1901,11 +1891,11 @@ func (l *LibvirtDomainManager) GetUsers() []v1.VirtualMachineInstanceGuestOSUser
 		})
 	}
 
-	return userList
+	return userList, nil
 }
 
 // GetFilesystems return the full list of filesystems on the guest machine
-func (l *LibvirtDomainManager) GetFilesystems() []v1.VirtualMachineInstanceFileSystem {
+func (l *LibvirtDomainManager) GetFilesystems() ([]v1.VirtualMachineInstanceFileSystem, error) {
 	fsInfo := l.agentData.GetFS(-1)
 	fsList := []v1.VirtualMachineInstanceFileSystem{}
 
@@ -1919,7 +1909,7 @@ func (l *LibvirtDomainManager) GetFilesystems() []v1.VirtualMachineInstanceFileS
 		})
 	}
 
-	return fsList
+	return fsList, nil
 }
 
 // check whether VMI has a certain condition
@@ -1949,9 +1939,6 @@ func getDomainCreateFlags(vmi *v1.VirtualMachineInstance) libvirt.DomainCreateFl
 	flags := libvirt.DOMAIN_NONE
 
 	if vmi.ShouldStartPaused() {
-		flags |= libvirt.DOMAIN_START_PAUSED
-	}
-	if vmi.IsCPUDedicated() && vmi.Spec.Domain.CPU.IsolateEmulatorThread {
 		flags |= libvirt.DOMAIN_START_PAUSED
 	}
 	return flags

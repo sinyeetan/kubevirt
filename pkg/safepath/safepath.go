@@ -2,7 +2,6 @@ package safepath
 
 import (
 	"container/list"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -109,7 +108,7 @@ func newLimitedFifo(maxOps uint) *fifo {
 func OpenAtNoFollow(path *Path) (file *File, err error) {
 	fd, err := open(path.rootBase)
 	if err != nil {
-		return nil, fmt.Errorf("failed opening path %v: %w", path, err)
+		return nil, err
 	}
 	for _, child := range strings.Split(filepath.Clean(path.relativePath), pathSeparator) {
 		if child == "" {
@@ -118,7 +117,7 @@ func OpenAtNoFollow(path *Path) (file *File, err error) {
 		newfd, err := openat(fd, child)
 		_ = syscall.Close(fd) // always close the parent after the lookup
 		if err != nil {
-			return nil, fmt.Errorf("failed opening %s for path %v: %w", child, path, err)
+			return nil, err
 		}
 		fd = newfd
 	}
@@ -166,7 +165,7 @@ func MkdirAtNoFollow(path *Path, dirName string, mode os.FileMode) error {
 	}
 	defer f.Close()
 	if err := unix.Mkdirat(f.fd, dirName, uint32(mode)); err != nil {
-		return fmt.Errorf("failed making the directory %v: %w", path, err)
+		return err
 	}
 	return nil
 }
@@ -213,26 +212,6 @@ func StatAtNoFollow(path *Path) (os.FileInfo, error) {
 	}
 	defer pathFd.Close()
 	return os.Stat(pathFd.SafePath())
-}
-
-func GetxattrNoFollow(path *Path, attr string) ([]byte, error) {
-	var ret []byte
-	pathFd, err := OpenAtNoFollow(path)
-	if err != nil {
-		return nil, err
-	}
-	defer pathFd.Close()
-	size, err := syscall.Getxattr(pathFd.SafePath(), attr, ret)
-	if err != nil {
-		return nil, err
-	}
-	ret = make([]byte, size)
-	_, err = syscall.Getxattr(pathFd.SafePath(), attr, ret)
-	if err != nil {
-		return nil, err
-	}
-
-	return ret[:len(ret)-1], nil
 }
 
 type File struct {
@@ -337,10 +316,9 @@ func newPath(rootBase, relativePath string) *Path {
 
 // NewFileNoFollow assumes that a real path to a file is given. It will validate that
 // the file is indeed absolute by doing the following checks:
-//   - ensure that the path is absolute
-//   - ensure that the path does not container relative path elements
-//   - ensure that no symlinks are provided
-//
+//   * ensure that the path is absolute
+//   * ensure that the path does not container relative path elements
+//   * ensure that no symlinks are provided
 // It will return the opened file which contains a link to a safe-to-use path
 // to the file, which can't be tampered with. To operate on the file just use os.Open and related calls.
 func NewFileNoFollow(path string) (*File, error) {
@@ -408,16 +386,12 @@ func UnlinkAtNoFollow(path *Path) error {
 		return err
 	}
 	defer fd.Close()
-
-	options := 0
 	if info.IsDir() {
 		// if dir is empty we can delete it with AT_REMOVEDIR
-		options = unix.AT_REMOVEDIR
+		return unlinkat(fd.fd, basename, unix.AT_REMOVEDIR)
+	} else {
+		return unlinkat(fd.fd, basename, 0)
 	}
-	if err = unlinkat(fd.fd, basename, options); err != nil {
-		return fmt.Errorf("failed unlinking path %v: %w", path, err)
-	}
-	return nil
 }
 
 // ListenUnixNoFollow safely creates a socket in user-owned path
@@ -437,9 +411,9 @@ func ListenUnixNoFollow(socketDir *Path, socketName string) (net.Listener, error
 	if err == nil {
 		// This ensures that we don't allow unlinking arbitrary files
 		if err := UnlinkAtNoFollow(socketPath); err != nil {
-			return nil, fmt.Errorf("failed unlinking socket %v: %w", socketPath, err)
+			return nil, err
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
 

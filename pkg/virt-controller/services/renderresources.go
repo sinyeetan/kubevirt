@@ -11,6 +11,7 @@ import (
 
 	v1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/kubecli"
+	"kubevirt.io/client-go/log"
 
 	"kubevirt.io/kubevirt/pkg/downwardmetrics"
 	"kubevirt.io/kubevirt/pkg/util"
@@ -264,11 +265,11 @@ func copyResources(srcResources, dstResources k8sv1.ResourceList) {
 // memory needed for the domain to operate properly.
 // This includes the memory needed for the guest and memory
 // for Qemu and OS overhead.
+//
 // The return value is overhead memory quantity
 //
 // Note: This is the best estimation we were able to come up with
-//
-//	and is still not 100% accurate
+//       and is still not 100% accurate
 func GetMemoryOverhead(vmi *v1.VirtualMachineInstance, cpuArch string) *resource.Quantity {
 	domain := vmi.Spec.Domain
 	vmiMemoryReq := domain.Resources.Requests.Memory()
@@ -286,7 +287,7 @@ func GetMemoryOverhead(vmi *v1.VirtualMachineInstance, cpuArch string) *resource
 	overhead.Add(resource.MustParse(VirtLauncherMonitorOverhead))
 	overhead.Add(resource.MustParse(VirtLauncherOverhead))
 	overhead.Add(resource.MustParse(VirtlogdOverhead))
-	overhead.Add(resource.MustParse(VirtqemudOverhead))
+	overhead.Add(resource.MustParse(LibvirtdOverhead))
 	overhead.Add(resource.MustParse(QemuOverhead))
 
 	// Add CPU table overhead (8 MiB per vCPU and 8 MiB per IO thread)
@@ -357,14 +358,6 @@ func GetMemoryOverhead(vmi *v1.VirtualMachineInstance, cpuArch string) *resource
 		overhead.Add(resource.MustParse("53Mi"))
 	}
 
-	// Additional overhead for each interface with Passt binding, that forwards all ports.
-	// More information can be found here: https://bugs.passt.top/show_bug.cgi?id=20
-	for _, net := range vmi.Spec.Domain.Devices.Interfaces {
-		if net.Passt != nil && len(net.Ports) == 0 {
-			overhead.Add(resource.MustParse("800Mi"))
-		}
-	}
-
 	return overhead
 }
 
@@ -431,9 +424,6 @@ func getRequiredResources(vmi *v1.VirtualMachineInstance, allowEmulation bool) k
 	if !allowEmulation {
 		res[KvmDevice] = resource.MustParse("1")
 	}
-	if util.IsAutoAttachVSOCK(vmi) {
-		res[VhostVsockDevice] = resource.MustParse("1")
-	}
 	return res
 }
 
@@ -460,10 +450,15 @@ func getNetworkToResourceMap(virtClient kubecli.KubevirtClient, vmi *v1.VirtualM
 
 func validatePermittedHostDevices(spec *v1.VirtualMachineInstanceSpec, config *virtconfig.ClusterConfig) error {
 	errors := make([]string, 0)
+	log.Log.Info("=========================virt-controller/services/renderresources.go validate permitted device===========")
 
 	if hostDevs := config.GetPermittedHostDevices(); hostDevs != nil {
 		// build a map of all permitted host devices
 		supportedHostDevicesMap := make(map[string]bool)
+		for _, dev := range hostDevs.USBDevices {
+			supportedHostDevicesMap[dev.ResourceName] = true
+		}
+
 		for _, dev := range hostDevs.PciHostDevices {
 			supportedHostDevicesMap[dev.ResourceName] = true
 		}

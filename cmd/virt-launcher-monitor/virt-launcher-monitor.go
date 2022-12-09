@@ -22,6 +22,7 @@ package main
 import (
 	goflag "flag"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"os/exec"
@@ -261,7 +262,7 @@ func findPid(commandNamePrefix string) (int, error) {
 
 	for _, entry := range entries {
 		// #nosec No risk for path injection. Reading specific entries under /proc
-		content, err := os.ReadFile(entry)
+		content, err := ioutil.ReadFile(entry)
 		if err != nil {
 			return 0, err
 		}

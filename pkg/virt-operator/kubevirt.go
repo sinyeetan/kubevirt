@@ -549,7 +549,6 @@ func (c *KubeVirtController) enqueueKubeVirt(obj interface{}) {
 	key, err := controller.KeyFunc(kv)
 	if err != nil {
 		logger.Object(kv).Reason(err).Error("Failed to extract key from KubeVirt.")
-		return
 	}
 	c.delayedQueueAdder(key, c.queue)
 }
@@ -756,7 +755,7 @@ func (c *KubeVirtController) generateInstallStrategyJob(config *operatorutil.Kub
 							Env: []k8sv1.EnvVar{
 								{
 									// Deprecated, keep it for backwards compatibility
-									Name:  util.OldOperatorImageEnvName,
+									Name:  util.OperatorImageEnvName,
 									Value: operatorImage,
 								},
 								{

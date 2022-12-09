@@ -23,11 +23,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
-
-	"kubevirt.io/kubevirt/tests"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -147,20 +146,12 @@ type KubeVirtTestData struct {
 	deleteFromCache bool
 	addToCache      bool
 
-	defaultConfig     *util.KubeVirtDeploymentConfig
-	mockEnvVarManager util.EnvVarManager
+	defaultConfig *util.KubeVirtDeploymentConfig
 }
-
-var mockEnvVarManager = &util.EnvVarManagerMock{}
 
 func (k *KubeVirtTestData) BeforeTest() {
 
-	k.mockEnvVarManager = mockEnvVarManager
-
-	err := k.mockEnvVarManager.Setenv(util.OldOperatorImageEnvName, fmt.Sprintf("%s/virt-operator:%s", "someregistry", "v9.9.9"))
-	Expect(err).NotTo(HaveOccurred())
-
-	k.defaultConfig = k.getConfig("", "")
+	k.defaultConfig = getConfig("", "")
 
 	k.totalAdds = 0
 	k.totalUpdates = 0
@@ -1079,7 +1070,7 @@ func (k *KubeVirtTestData) addPrometheusRule(prometheusRule *promv1.PrometheusRu
 func (k *KubeVirtTestData) generateRandomResources() int {
 	version := fmt.Sprintf("rand-%s", rand.String(10))
 	registry := fmt.Sprintf("rand-%s", rand.String(10))
-	config := k.getConfig(registry, version)
+	config := getConfig(registry, version)
 
 	all := make([]runtime.Object, 0)
 	all = append(all, &k8sv1.ServiceAccount{
@@ -1239,16 +1230,16 @@ func (k *KubeVirtTestData) addAllWithExclusionMap(config *util.KubeVirtDeploymen
 	all = append(all, components.NewApiServerService(NAMESPACE))
 	all = append(all, components.NewExportProxyService(NAMESPACE))
 
-	apiDeployment, _ := tests.GetDefaultVirtApiDeployment(NAMESPACE, config)
+	apiDeployment, _ := components.NewApiServerDeployment(NAMESPACE, config.GetImageRegistry(), config.GetImagePrefix(), config.GetApiVersion(), "", "", "", config.GetImagePullPolicy(), config.GetVerbosity(), config.GetExtraEnv())
 	apiDeploymentPdb := components.NewPodDisruptionBudgetForDeployment(apiDeployment)
-	controller, _ := tests.GetDefaultVirtControllerDeployment(NAMESPACE, config)
+	controller, _ := components.NewControllerDeployment(NAMESPACE, config.GetImageRegistry(), config.GetImagePrefix(), config.GetControllerVersion(), config.GetLauncherVersion(), config.GetExportServerVersion(), "", "", "", config.GetImagePullPolicy(), config.GetVerbosity(), config.GetExtraEnv())
 	controllerPdb := components.NewPodDisruptionBudgetForDeployment(controller)
 
-	handler, _ := tests.GetDefaultVirtHandlerDaemonSet(NAMESPACE, config)
+	handler, _ := components.NewHandlerDaemonSet(NAMESPACE, config.GetImageRegistry(), config.GetImagePrefix(), config.GetHandlerVersion(), "", "", "", config.GetLauncherVersion(), config.GetImagePullPolicy(), nil, config.GetVerbosity(), config.GetExtraEnv())
 	all = append(all, apiDeployment, apiDeploymentPdb, controller, controllerPdb, handler)
 
 	if exportProxyEnabled(kv) {
-		exportProxy, _ := tests.GetDefaultExportProxyDeployment(NAMESPACE, config)
+		exportProxy, _ := components.NewExportProxyDeployment(NAMESPACE, config.GetImageRegistry(), config.GetImagePrefix(), config.GetExportProxyVersion(), "", "", "", config.GetImagePullPolicy(), config.GetVerbosity(), config.GetExtraEnv())
 		exportProxyPdb := components.NewPodDisruptionBudgetForDeployment(exportProxy)
 		route := components.NewExportProxyRoute(NAMESPACE)
 		all = append(all, exportProxy, exportProxyPdb, route)
@@ -1356,8 +1347,19 @@ func (k *KubeVirtTestData) addAllButHandler(config *util.KubeVirtDeploymentConfi
 }
 
 func (k *KubeVirtTestData) addVirtHandler(config *util.KubeVirtDeploymentConfig, kv *v1.KubeVirt) {
-	handler, err := tests.GetDefaultVirtHandlerDaemonSet(NAMESPACE, config)
-	Expect(err).ToNot(HaveOccurred())
+	handler, _ := components.NewHandlerDaemonSet(
+		NAMESPACE,
+		config.GetImageRegistry(),
+		config.GetImagePrefix(),
+		config.GetHandlerVersion(),
+		"",
+		"",
+		"",
+		config.GetLauncherVersion(),
+		config.GetImagePullPolicy(),
+		nil,
+		config.GetVerbosity(),
+		config.GetExtraEnv())
 
 	c, _ := apply.NewCustomizer(kv.Spec.CustomizeComponents)
 
@@ -1494,7 +1496,7 @@ func (k *KubeVirtTestData) makeHandlerReady() {
 func (k *KubeVirtTestData) addDummyValidationWebhook() {
 	version := fmt.Sprintf("rand-%s", rand.String(10))
 	registry := fmt.Sprintf("rand-%s", rand.String(10))
-	config := k.getConfig(registry, version)
+	config := getConfig(registry, version)
 
 	validationWebhook := &admissionregistrationv1.ValidatingWebhookConfiguration{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1574,7 +1576,7 @@ func (k *KubeVirtTestData) addPodsWithIndividualConfigs(config *util.KubeVirtDep
 	// virt-controller
 	// virt-handler
 	var deployments []*appsv1.Deployment
-	apiDeployment, _ := tests.GetDefaultVirtApiDeployment(NAMESPACE, config)
+	apiDeployment, _ := components.NewApiServerDeployment(NAMESPACE, config.GetImageRegistry(), config.GetImagePrefix(), config.GetApiVersion(), "", "", "", config.GetImagePullPolicy(), config.GetVerbosity(), config.GetExtraEnv())
 
 	pod := &k8sv1.Pod{
 		ObjectMeta: apiDeployment.Spec.Template.ObjectMeta,
@@ -1591,7 +1593,7 @@ func (k *KubeVirtTestData) addPodsWithIndividualConfigs(config *util.KubeVirtDep
 	k.addPod(pod)
 	deployments = append(deployments, apiDeployment)
 
-	controller, _ := tests.GetDefaultVirtControllerDeployment(NAMESPACE, config)
+	controller, _ := components.NewControllerDeployment(NAMESPACE, configController.GetImageRegistry(), configController.GetImagePrefix(), configController.GetControllerVersion(), configController.GetLauncherVersion(), config.GetExportServerVersion(), "", "", "", configController.GetImagePullPolicy(), configController.GetVerbosity(), configController.GetExtraEnv())
 	pod = &k8sv1.Pod{
 		ObjectMeta: controller.Spec.Template.ObjectMeta,
 		Spec:       controller.Spec.Template.Spec,
@@ -1607,7 +1609,7 @@ func (k *KubeVirtTestData) addPodsWithIndividualConfigs(config *util.KubeVirtDep
 	k.addPod(pod)
 	deployments = append(deployments, controller)
 
-	handler, _ := tests.GetDefaultVirtHandlerDaemonSet(NAMESPACE, config)
+	handler, _ := components.NewHandlerDaemonSet(NAMESPACE, configHandler.GetImageRegistry(), configHandler.GetImagePrefix(), configHandler.GetHandlerVersion(), "", "", "", configController.GetLauncherVersion(), configHandler.GetImagePullPolicy(), nil, configHandler.GetVerbosity(), configHandler.GetExtraEnv())
 	pod = &k8sv1.Pod{
 		ObjectMeta: handler.Spec.Template.ObjectMeta,
 		Spec:       handler.Spec.Template.Spec,
@@ -1625,7 +1627,7 @@ func (k *KubeVirtTestData) addPodsWithIndividualConfigs(config *util.KubeVirtDep
 	k.addPod(pod)
 
 	if exportProxyEnabled(kv) {
-		exportProxy, _ := tests.GetDefaultExportProxyDeployment(NAMESPACE, config)
+		exportProxy, _ := components.NewExportProxyDeployment(NAMESPACE, config.GetImageRegistry(), config.GetImagePrefix(), config.GetExportProxyVersion(), "", "", "", config.GetImagePullPolicy(), config.GetVerbosity(), config.GetExtraEnv())
 		pod = &k8sv1.Pod{
 			ObjectMeta: exportProxy.Spec.Template.ObjectMeta,
 			Spec:       exportProxy.Spec.Template.Spec,
@@ -1655,23 +1657,11 @@ func (k *KubeVirtTestData) addPodsAndPodDisruptionBudgets(config *util.KubeVirtD
 	k.addPodsWithOptionalPodDisruptionBudgets(config, true, kv)
 }
 
-func (k *KubeVirtTestData) getConfig(registry, version string) *util.KubeVirtDeploymentConfig {
-	return util.GetTargetConfigFromKVWithEnvVarManager(&v1.KubeVirt{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: NAMESPACE,
-		},
-		Spec: v1.KubeVirtSpec{
-			ImageRegistry: registry,
-			ImageTag:      version,
-		},
-	},
-		k.mockEnvVarManager)
-}
-
 var _ = Describe("KubeVirt Operator", func() {
 
 	BeforeEach(func() {
-		util.DefaultEnvVarManager = mockEnvVarManager
+		err := os.Setenv(util.OperatorImageEnvName, fmt.Sprintf("%s/virt-operator:%s", "someregistry", "v9.9.9"))
+		Expect(err).NotTo(HaveOccurred())
 	})
 
 	Context("On valid KubeVirt object", func() {
@@ -1780,7 +1770,7 @@ var _ = Describe("KubeVirt Operator", func() {
 			// create all resources which should already exist
 			kubecontroller.SetLatestApiVersionAnnotation(kv)
 			kvTestData.addKubeVirt(kv)
-			customConfig := kvTestData.getConfig(kvTestData.defaultConfig.GetImageRegistry(), "custom.tag")
+			customConfig := getConfig(kvTestData.defaultConfig.GetImageRegistry(), "custom.tag")
 
 			kvTestData.fakeNamespaceModificationEvent()
 			kvTestData.shouldExpectNamespacePatch()
@@ -2150,7 +2140,7 @@ var _ = Describe("KubeVirt Operator", func() {
 			kvTestData.BeforeTest()
 			defer kvTestData.AfterTest()
 
-			config := kvTestData.getConfig("registry", "v1.1.1")
+			config := getConfig("registry", "v1.1.1")
 			envKey := rand.String(10)
 			envVal := rand.String(10)
 			config.PassthroughEnvVars = map[string]string{envKey: envVal}
@@ -2161,48 +2151,36 @@ var _ = Describe("KubeVirt Operator", func() {
 		})
 
 		It("should create an api server deployment with passthrough env vars, if provided in config", func() {
-			kvTestData := KubeVirtTestData{}
-			kvTestData.BeforeTest()
-			defer kvTestData.AfterTest()
-
-			config := kvTestData.getConfig("registry", "v1.1.1")
+			config := getConfig("registry", "v1.1.1")
 			envKey := rand.String(10)
 			envVal := rand.String(10)
 			config.PassthroughEnvVars = map[string]string{envKey: envVal}
 
-			apiDeployment, err := tests.GetDefaultVirtApiDeployment(NAMESPACE, config)
+			apiDeployment, err := components.NewApiServerDeployment(NAMESPACE, config.GetImageRegistry(), config.GetImagePrefix(), config.GetApiVersion(), "", "", "", config.GetImagePullPolicy(), config.GetVerbosity(), config.GetExtraEnv())
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(apiDeployment.Spec.Template.Spec.Containers[0].Env).To(ContainElement(k8sv1.EnvVar{Name: envKey, Value: envVal}))
 		})
 
 		It("should create a controller deployment with passthrough env vars, if provided in config", func() {
-			kvTestData := KubeVirtTestData{}
-			kvTestData.BeforeTest()
-			defer kvTestData.AfterTest()
-
-			config := kvTestData.getConfig("registry", "v1.1.1")
+			config := getConfig("registry", "v1.1.1")
 			envKey := rand.String(10)
 			envVal := rand.String(10)
 			config.PassthroughEnvVars = map[string]string{envKey: envVal}
 
-			controllerDeployment, err := tests.GetDefaultVirtControllerDeployment(NAMESPACE, config)
+			controllerDeployment, err := components.NewControllerDeployment(NAMESPACE, config.GetImageRegistry(), config.GetImagePrefix(), config.GetControllerVersion(), config.GetLauncherVersion(), config.GetExportServerVersion(), "", "", "", config.GetImagePullPolicy(), config.GetVerbosity(), config.GetExtraEnv())
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(controllerDeployment.Spec.Template.Spec.Containers[0].Env).To(ContainElement(k8sv1.EnvVar{Name: envKey, Value: envVal}))
 		})
 
 		It("should create a handler daemonset with passthrough env vars, if provided in config", func() {
-			kvTestData := KubeVirtTestData{}
-			kvTestData.BeforeTest()
-			defer kvTestData.AfterTest()
-
-			config := kvTestData.getConfig("registry", "v1.1.1")
+			config := getConfig("registry", "v1.1.1")
 			envKey := rand.String(10)
 			envVal := rand.String(10)
 			config.PassthroughEnvVars = map[string]string{envKey: envVal}
 
-			handlerDaemonset, err := tests.GetDefaultVirtHandlerDaemonSet(NAMESPACE, config)
+			handlerDaemonset, err := components.NewHandlerDaemonSet(NAMESPACE, config.GetImageRegistry(), config.GetImagePrefix(), config.GetHandlerVersion(), "", "", "", config.GetLauncherVersion(), config.GetImagePullPolicy(), nil, config.GetVerbosity(), config.GetExtraEnv())
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(handlerDaemonset.Spec.Template.Spec.Containers[0].Env).To(ContainElement(k8sv1.EnvVar{Name: envKey, Value: envVal}))
@@ -2392,7 +2370,7 @@ var _ = Describe("KubeVirt Operator", func() {
 			kvTestData.BeforeTest()
 			defer kvTestData.AfterTest()
 
-			rollbackConfig := kvTestData.getConfig("otherregistry", "9.9.7")
+			rollbackConfig := getConfig("otherregistry", "9.9.7")
 
 			kv := &v1.KubeVirt{
 				ObjectMeta: metav1.ObjectMeta{
@@ -2458,9 +2436,7 @@ var _ = Describe("KubeVirt Operator", func() {
 			kvTestData.BeforeTest()
 			defer kvTestData.AfterTest()
 
-			err := kvTestData.mockEnvVarManager.Unsetenv(util.OldOperatorImageEnvName)
-			Expect(err).NotTo(HaveOccurred())
-			updatedConfig := kvTestData.getConfig("otherregistry", "9.9.10")
+			updatedConfig := getConfig("otherregistry", "9.9.10")
 
 			kv := &v1.KubeVirt{
 				ObjectMeta: metav1.ObjectMeta{
@@ -2527,7 +2503,7 @@ var _ = Describe("KubeVirt Operator", func() {
 			kvTestData.BeforeTest()
 			defer kvTestData.AfterTest()
 
-			updatedConfig := kvTestData.getConfig("otherregistry", "9.9.10")
+			updatedConfig := getConfig("otherregistry", "9.9.10")
 
 			kv := &v1.KubeVirt{
 				ObjectMeta: metav1.ObjectMeta{
@@ -2595,12 +2571,12 @@ var _ = Describe("KubeVirt Operator", func() {
 		})
 
 		DescribeTable("should update kubevirt resources when Operator version changes if no imageTag and imageRegistry is explicitly set.", func(withExport bool, patchCount, resourceCount, numPDBs int) {
+			os.Setenv(util.OperatorImageEnvName, fmt.Sprintf("%s/virt-operator:%s", "otherregistry", "1.1.1"))
+			updatedConfig := getConfig("", "")
+
 			kvTestData := KubeVirtTestData{}
 			kvTestData.BeforeTest()
 			defer kvTestData.AfterTest()
-
-			kvTestData.mockEnvVarManager.Setenv(util.OldOperatorImageEnvName, fmt.Sprintf("%s/virt-operator:%s", "otherregistry", "1.1.1"))
-			updatedConfig := kvTestData.getConfig("", "")
 
 			kv := &v1.KubeVirt{
 				ObjectMeta: metav1.ObjectMeta{
@@ -2672,11 +2648,11 @@ var _ = Describe("KubeVirt Operator", func() {
 		)
 
 		DescribeTable("should update resources when changing KubeVirt version.", func(withExport bool, patchCount, resourceCount int) {
+			updatedConfig := getConfig("otherregistry", "1.1.1")
+
 			kvTestData := KubeVirtTestData{}
 			kvTestData.BeforeTest()
 			defer kvTestData.AfterTest()
-
-			updatedConfig := kvTestData.getConfig("otherregistry", "1.1.1")
 
 			kv := &v1.KubeVirt{
 				ObjectMeta: metav1.ObjectMeta{
@@ -2746,11 +2722,11 @@ var _ = Describe("KubeVirt Operator", func() {
 		)
 
 		DescribeTable("should patch poddisruptionbudgets when changing KubeVirt version.", func(withExport bool, numPDBs int) {
+			updatedConfig := getConfig("otherregistry", "1.1.1")
+
 			kvTestData := KubeVirtTestData{}
 			kvTestData.BeforeTest()
 			defer kvTestData.AfterTest()
-
-			updatedConfig := kvTestData.getConfig("otherregistry", "1.1.1")
 
 			kv := &v1.KubeVirt{
 				ObjectMeta: metav1.ObjectMeta{
@@ -3064,6 +3040,18 @@ func getSCC() secv1.SecurityContextConstraints {
 			"someUser",
 		},
 	}
+}
+
+func getConfig(registry, version string) *util.KubeVirtDeploymentConfig {
+	return util.GetTargetConfigFromKV(&v1.KubeVirt{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: NAMESPACE,
+		},
+		Spec: v1.KubeVirtSpec{
+			ImageRegistry: registry,
+			ImageTag:      version,
+		},
+	})
 }
 
 func syncCaches(stop chan struct{}, kvInformer cache.SharedIndexInformer, informers util.Informers) {

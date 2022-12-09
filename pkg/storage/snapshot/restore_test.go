@@ -3,13 +3,11 @@ package snapshot
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/golang/mock/gomock"
 	vsv1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -22,10 +20,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/pointer"
 
-	kubevirtv1 "kubevirt.io/api/core/v1"
 	v1 "kubevirt.io/api/core/v1"
-	instancetypeapi "kubevirt.io/api/instancetype"
-	instancetypev1alpha2 "kubevirt.io/api/instancetype/v1alpha2"
 	snapshotv1 "kubevirt.io/api/snapshot/v1alpha1"
 	cdifake "kubevirt.io/client-go/generated/containerized-data-importer/clientset/versioned/fake"
 	kubevirtfake "kubevirt.io/client-go/generated/kubevirt/clientset/versioned/fake"
@@ -33,12 +28,11 @@ import (
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 
 	virtcontroller "kubevirt.io/kubevirt/pkg/controller"
-	"kubevirt.io/kubevirt/pkg/instancetype"
 	"kubevirt.io/kubevirt/pkg/testutils"
 	"kubevirt.io/kubevirt/pkg/util/status"
 )
 
-var _ = Describe("Restore controller", func() {
+var _ = Describe("Restore controlleer", func() {
 	const (
 		testNamespace  = "default"
 		uid            = "uid"
@@ -181,24 +175,6 @@ var _ = Describe("Restore controller", func() {
 		}
 	}
 
-	createPVCsForVMWithDataSourceRef := func(vm *v1.VirtualMachine) []corev1.PersistentVolumeClaim {
-		var pvcs []corev1.PersistentVolumeClaim
-		for i, dv := range vm.Spec.DataVolumeTemplates {
-			pvc := corev1.PersistentVolumeClaim{
-				ObjectMeta: metav1.ObjectMeta{
-					Namespace: vm.Namespace,
-					Name:      dv.Name,
-				},
-				Spec: *dv.Spec.PVC,
-			}
-			pvc.Spec.DataSourceRef = dv.Spec.PVC.DataSource
-			pvc.Spec.VolumeName = fmt.Sprintf("volume%d", i+1)
-			pvc.ResourceVersion = "1"
-			pvcs = append(pvcs, pvc)
-		}
-		return pvcs
-	}
-
 	Context("One valid Restore controller given", func() {
 
 		var ctrl *gomock.Controller
@@ -229,9 +205,6 @@ var _ = Describe("Restore controller", func() {
 		var storageClassInformer cache.SharedIndexInformer
 		var storageClassSource *framework.FakeControllerSource
 
-		var crInformer cache.SharedIndexInformer
-		var crSource *framework.FakeControllerSource
-
 		var stop chan struct{}
 		var controller *VMRestoreController
 		var recorder *record.FakeRecorder
@@ -241,7 +214,6 @@ var _ = Describe("Restore controller", func() {
 		var kubevirtClient *kubevirtfake.Clientset
 		var k8sClient *k8sfake.Clientset
 		var cdiClient *cdifake.Clientset
-		var virtClient *kubecli.MockKubevirtClient
 
 		syncCaches := func(stop chan struct{}) {
 			go vmRestoreInformer.Run(stop)
@@ -252,7 +224,6 @@ var _ = Describe("Restore controller", func() {
 			go vmiInformer.Run(stop)
 			go dataVolumeInformer.Run(stop)
 			go storageClassInformer.Run(stop)
-			go crInformer.Run(stop)
 			Expect(cache.WaitForCacheSync(
 				stop,
 				vmRestoreInformer.HasSynced,
@@ -263,14 +234,13 @@ var _ = Describe("Restore controller", func() {
 				vmiInformer.HasSynced,
 				dataVolumeInformer.HasSynced,
 				storageClassInformer.HasSynced,
-				crInformer.HasSynced,
 			)).To(BeTrue())
 		}
 
 		BeforeEach(func() {
 			stop = make(chan struct{})
 			ctrl = gomock.NewController(GinkgoT())
-			virtClient = kubecli.NewMockKubevirtClient(ctrl)
+			virtClient := kubecli.NewMockKubevirtClient(ctrl)
 			vmInterface = kubecli.NewMockVirtualMachineInterface(ctrl)
 
 			vmRestoreInformer, vmRestoreSource = testutils.NewFakeInformerWithIndexersFor(&snapshotv1.VirtualMachineRestore{}, virtcontroller.GetVirtualMachineRestoreInformerIndexers())
@@ -281,7 +251,6 @@ var _ = Describe("Restore controller", func() {
 			dataVolumeInformer, dataVolumeSource = testutils.NewFakeInformerFor(&cdiv1.DataVolume{})
 			pvcInformer, pvcSource = testutils.NewFakeInformerFor(&corev1.PersistentVolumeClaim{})
 			storageClassInformer, storageClassSource = testutils.NewFakeInformerFor(&storagev1.StorageClass{})
-			crInformer, crSource = testutils.NewFakeInformerWithIndexersFor(&appsv1.ControllerRevision{}, virtcontroller.GetControllerRevisionInformerIndexers())
 
 			recorder = record.NewFakeRecorder(100)
 			recorder.IncludeObject = true
@@ -303,7 +272,6 @@ var _ = Describe("Restore controller", func() {
 				Recorder:                  recorder,
 				vmStatusUpdater:           status.NewVMStatusUpdater(virtClient),
 				VolumeSnapshotProvider:    fakeVolumeSnapshotProvider,
-				CRInformer:                crInformer,
 			}
 			controller.Init()
 
@@ -913,257 +881,6 @@ var _ = Describe("Restore controller", func() {
 
 			})
 		})
-
-		It("should create restore PVCs with populated dataSourceRef and dataSource", func() {
-			// Mock the restore environment from scratch, so we use source PVCs with dataSourceRef
-			vm := createSnapshotVM()
-			pvcs := createPVCsForVMWithDataSourceRef(vm)
-			s := createSnapshot()
-			sc := createVirtualMachineSnapshotContent(s, vm, pvcs)
-			storageClass := createStorageClass()
-			s.Status.VirtualMachineSnapshotContentName = &sc.Name
-			sc.Status = &snapshotv1.VirtualMachineSnapshotContentStatus{
-				CreationTime: timeFunc(),
-				ReadyToUse:   &t,
-			}
-			vmSnapshotSource.Add(s)
-			vmSnapshotContentSource.Add(sc)
-			storageClassSource.Add(storageClass)
-
-			// Actual test
-			r := createRestoreWithOwner()
-			vm = createModifiedVM()
-			r.Status = &snapshotv1.VirtualMachineRestoreStatus{
-				Complete: &f,
-				Conditions: []snapshotv1.Condition{
-					newProgressingCondition(corev1.ConditionTrue, "Creating new PVCs"),
-					newReadyCondition(corev1.ConditionFalse, "Waiting for new PVCs"),
-				},
-			}
-			vmSource.Add(vm)
-			addVolumeRestores(r)
-			pvcSize := resource.MustParse("2Gi")
-			vs := createVolumeSnapshot(r.Status.Restores[0].VolumeSnapshotName, pvcSize)
-			fakeVolumeSnapshotProvider.Add(vs)
-			expectUpdateVMRestoreInProgress(vm)
-			expectPVCCreateWithDataSourceRef(k8sClient, r, pvcSize)
-			addVirtualMachineRestore(r)
-			controller.processVMRestoreWorkItem()
-		})
-
-		Describe("restore vm with instancetypes and preferences", func() {
-			var (
-				vmSnapshot             *snapshotv1.VirtualMachineSnapshot
-				originalVM             *v1.VirtualMachine
-				vmSnapshotContent      *snapshotv1.VirtualMachineSnapshotContent
-				restore                *snapshotv1.VirtualMachineRestore
-				instancetypeObj        *instancetypev1alpha2.VirtualMachineInstancetype
-				instancetypeSnapshotCR *appsv1.ControllerRevision
-				instancetypeOriginalCR *appsv1.ControllerRevision
-				preferenceObj          *instancetypev1alpha2.VirtualMachinePreference
-				preferenceSnapshotCR   *appsv1.ControllerRevision
-				preferenceOriginalCR   *appsv1.ControllerRevision
-			)
-
-			expectCreateVM := func(vm *v1.VirtualMachine) {
-				newVMUID := vm.UID
-				vm.UID = ""
-				vm.ResourceVersion = ""
-				vm.Annotations = map[string]string{"restore.kubevirt.io/lastRestoreUID": "restore-uid"}
-				vmInterface.EXPECT().
-					Create(vm).
-					Do(func(objs ...interface{}) {
-						vm.UID = newVMUID
-					}).Return(vm, nil)
-			}
-
-			expectUpdateVMRestored := func(vm *v1.VirtualMachine) {
-				expectedUpdatedVM := vm.DeepCopy()
-				expectedUpdatedVM.Annotations = map[string]string{"restore.kubevirt.io/lastRestoreUID": "restore-uid"}
-				vmInterface.EXPECT().
-					Update(expectedUpdatedVM).
-					Do(func(objs ...interface{}) {
-						updatedVM := objs[0].(*v1.VirtualMachine)
-						Expect(*updatedVM).To(Equal(*expectedUpdatedVM))
-					}).Return(expectedUpdatedVM, nil)
-			}
-
-			expectUpdateVMRestoreUpdatingTargetSpec := func(vmRestore *snapshotv1.VirtualMachineRestore) {
-				expectedUpdatedRestore := vmRestore.DeepCopy()
-				expectedUpdatedRestore.ResourceVersion = "1"
-				expectedUpdatedRestore.Status.Conditions = []snapshotv1.Condition{
-					newProgressingCondition(corev1.ConditionTrue, "Updating target spec"),
-					newReadyCondition(corev1.ConditionFalse, "Waiting for target update"),
-				}
-				expectVMRestoreUpdate(kubevirtClient, expectedUpdatedRestore)
-			}
-
-			getInstancetypeOriginalCR := func() *appsv1.ControllerRevision { return instancetypeOriginalCR }
-			getPreferenceOriginalCR := func() *appsv1.ControllerRevision { return preferenceOriginalCR }
-			nilInstancetypeMatcher := func() *v1.InstancetypeMatcher { return nil }
-			nilPrefrenceMatcher := func() *v1.PreferenceMatcher { return nil }
-
-			BeforeEach(func() {
-				virtClient.EXPECT().AppsV1().Return(k8sClient.AppsV1()).AnyTimes()
-
-				originalVM = createSnapshotVM()
-				restore = createRestoreWithOwner()
-
-				vmSnapshot = createSnapshot()
-				vmSnapshotContent = createVirtualMachineSnapshotContent(vmSnapshot, originalVM, nil)
-				vmSnapshotContent.Status = &snapshotv1.VirtualMachineSnapshotContentStatus{
-					CreationTime: timeFunc(),
-					ReadyToUse:   &t,
-				}
-
-				vmSnapshot.Status.VirtualMachineSnapshotContentName = &vmSnapshotContent.Name
-				vmSnapshotSource.Add(vmSnapshot)
-
-				instancetypeObj = createInstancetype()
-				var err error
-				instancetypeOriginalCR, err = instancetype.CreateControllerRevision(originalVM, instancetypeObj)
-				Expect(err).ToNot(HaveOccurred())
-				crSource.Add(instancetypeOriginalCR)
-
-				instancetypeSnapshotCR = createInstancetypeVirtualMachineSnapshotCR(originalVM, vmSnapshot, instancetypeObj)
-				crSource.Add(instancetypeSnapshotCR)
-
-				preferenceObj = createPreference()
-				preferenceOriginalCR, err = instancetype.CreateControllerRevision(originalVM, preferenceObj)
-				Expect(err).ToNot(HaveOccurred())
-				crSource.Add(preferenceOriginalCR)
-
-				preferenceSnapshotCR = createInstancetypeVirtualMachineSnapshotCR(originalVM, vmSnapshot, preferenceObj)
-				crSource.Add(preferenceSnapshotCR)
-			})
-
-			DescribeTable("with an existing VirtualMachine",
-				func(getVMInstancetypeMatcher, getSnapshotInstancetypeMatcher func() *v1.InstancetypeMatcher, getVMPreferenceMatcher, getSnapshotPreferenceMatcher func() *v1.PreferenceMatcher, getExpectedCR func() *appsv1.ControllerRevision) {
-					originalVM.Spec.Instancetype = getVMInstancetypeMatcher()
-					originalVM.Spec.Preference = getVMPreferenceMatcher()
-					vmSource.Add(originalVM)
-
-					vmSnapshotContent.Spec.Source.VirtualMachine.Spec.Instancetype = getSnapshotInstancetypeMatcher()
-					vmSnapshotContent.Spec.Source.VirtualMachine.Spec.Preference = getSnapshotPreferenceMatcher()
-					vmSnapshotContentSource.Add(vmSnapshotContent)
-
-					expectCreateControllerRevisionAlreadyExists(k8sClient, getExpectedCR())
-					expectUpdateVMRestoreInProgress(originalVM)
-					expectUpdateVMRestored(originalVM)
-					expectUpdateVMRestoreUpdatingTargetSpec(restore)
-
-					addVirtualMachineRestore(restore)
-					controller.processVMRestoreWorkItem()
-				},
-				Entry("and referenced instancetype",
-					func() *v1.InstancetypeMatcher {
-						return &v1.InstancetypeMatcher{
-							Name:         instancetypeObj.Name,
-							Kind:         instancetypeapi.SingularResourceName,
-							RevisionName: instancetypeOriginalCR.Name,
-						}
-					}, func() *v1.InstancetypeMatcher {
-						return &v1.InstancetypeMatcher{
-							Name:         instancetypeObj.Name,
-							Kind:         instancetypeapi.SingularResourceName,
-							RevisionName: instancetypeSnapshotCR.Name,
-						}
-					}, nilPrefrenceMatcher, nilPrefrenceMatcher, getInstancetypeOriginalCR,
-				),
-				Entry("and referenced preference", nilInstancetypeMatcher, nilInstancetypeMatcher,
-					func() *v1.PreferenceMatcher {
-						return &v1.PreferenceMatcher{
-							Name:         preferenceObj.Name,
-							Kind:         instancetypeapi.SingularPreferenceResourceName,
-							RevisionName: preferenceOriginalCR.Name,
-						}
-					},
-					func() *v1.PreferenceMatcher {
-						return &v1.PreferenceMatcher{
-							Name:         preferenceObj.Name,
-							Kind:         instancetypeapi.SingularPreferenceResourceName,
-							RevisionName: preferenceSnapshotCR.Name,
-						}
-					}, getPreferenceOriginalCR,
-				),
-			)
-
-			DescribeTable("with a new VirtualMachine",
-				func(getVMInstancetypeMatcher, getSnapshotInstancetypeMatcher func() *v1.InstancetypeMatcher, getVMPreferenceMatcher, getSnapshotPreferenceMatcher func() *v1.PreferenceMatcher, getExpectedCR func() *appsv1.ControllerRevision) {
-					originalVM.Spec.Instancetype = getVMInstancetypeMatcher()
-					originalVM.Spec.Preference = getVMPreferenceMatcher()
-					vmSource.Add(originalVM)
-
-					vmSnapshotContent.Spec.Source.VirtualMachine.Spec.Instancetype = getSnapshotInstancetypeMatcher()
-					vmSnapshotContent.Spec.Source.VirtualMachine.Spec.Preference = getSnapshotPreferenceMatcher()
-					vmSnapshotContentSource.Add(vmSnapshotContent)
-
-					// Ensure we restore into a new VM
-					newVM := originalVM.DeepCopy()
-					newVM.Name = "newvm"
-					newVM.UID = "newvm-uid"
-					restore.Spec.Target.Name = newVM.Name
-
-					originalCR := getExpectedCR()
-					expectedCreatedCR := originalCR.DeepCopy()
-					expectedCreatedCR.Name = strings.Replace(expectedCreatedCR.Name, originalVM.Name, newVM.Name, 1)
-					expectedCreatedCR.OwnerReferences = nil
-					expectControllerRevisionCreate(k8sClient, expectedCreatedCR)
-
-					// We need to be able to find the created CR from the controller so add it to the source
-					expectedCreatedCR.Namespace = testNamespace
-					crSource.Add(expectedCreatedCR)
-
-					expectedUpdatedCR := expectedCreatedCR.DeepCopy()
-					expectedUpdatedCR.ResourceVersion = "5"
-					expectedUpdatedCR.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(newVM, kubevirtv1.VirtualMachineGroupVersionKind)}
-					expectControllerRevisionUpdate(k8sClient, expectedUpdatedCR)
-
-					if newVM.Spec.Instancetype != nil {
-						newVM.Spec.Instancetype.RevisionName = expectedCreatedCR.Name
-					}
-					if newVM.Spec.Preference != nil {
-						newVM.Spec.Preference.RevisionName = expectedCreatedCR.Name
-					}
-					expectCreateVM(newVM)
-					expectUpdateVMRestoreUpdatingTargetSpec(restore)
-
-					addVirtualMachineRestore(restore)
-					controller.processVMRestoreWorkItem()
-				},
-				Entry("and referenced instancetype",
-					func() *v1.InstancetypeMatcher {
-						return &v1.InstancetypeMatcher{
-							Name:         instancetypeObj.Name,
-							Kind:         instancetypeapi.SingularResourceName,
-							RevisionName: instancetypeOriginalCR.Name,
-						}
-					}, func() *v1.InstancetypeMatcher {
-						return &v1.InstancetypeMatcher{
-							Name:         instancetypeObj.Name,
-							Kind:         instancetypeapi.SingularResourceName,
-							RevisionName: instancetypeSnapshotCR.Name,
-						}
-					}, nilPrefrenceMatcher, nilPrefrenceMatcher, getInstancetypeOriginalCR,
-				),
-				Entry("and referenced preference", nilInstancetypeMatcher, nilInstancetypeMatcher,
-					func() *v1.PreferenceMatcher {
-						return &v1.PreferenceMatcher{
-							Name:         preferenceObj.Name,
-							Kind:         instancetypeapi.SingularPreferenceResourceName,
-							RevisionName: preferenceOriginalCR.Name,
-						}
-					},
-					func() *v1.PreferenceMatcher {
-						return &v1.PreferenceMatcher{
-							Name:         preferenceObj.Name,
-							Kind:         instancetypeapi.SingularPreferenceResourceName,
-							RevisionName: preferenceSnapshotCR.Name,
-						}
-					}, getPreferenceOriginalCR,
-				),
-			)
-		})
 	})
 })
 
@@ -1182,30 +899,6 @@ func expectPVCCreates(client *k8sfake.Clientset, vmRestore *snapshotv1.VirtualMa
 			}
 		}
 		Expect(found).To(BeTrue())
-
-		return true, create.GetObject(), nil
-	})
-}
-
-func expectPVCCreateWithDataSourceRef(client *k8sfake.Clientset, vmRestore *snapshotv1.VirtualMachineRestore, expectedSize resource.Quantity) {
-	client.Fake.PrependReactor("create", "persistentvolumeclaims", func(action testing.Action) (handled bool, obj runtime.Object, err error) {
-		create, ok := action.(testing.CreateAction)
-		Expect(ok).To(BeTrue())
-
-		createObj := create.GetObject().(*corev1.PersistentVolumeClaim)
-		found := false
-		for _, vr := range vmRestore.Status.Restores {
-			if vr.PersistentVolumeClaimName == createObj.Name {
-				Expect(createObj.Spec.Resources.Requests[corev1.ResourceStorage]).To(Equal(expectedSize))
-				found = true
-				break
-			}
-		}
-		Expect(found).To(BeTrue())
-
-		Expect(createObj.Spec.DataSource).ToNot(BeNil())
-		Expect(createObj.Spec.DataSourceRef).ToNot(BeNil())
-		Expect(createObj.Spec.DataSource).To(Equal(createObj.Spec.DataSourceRef))
 
 		return true, create.GetObject(), nil
 	})

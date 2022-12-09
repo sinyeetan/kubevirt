@@ -20,7 +20,6 @@
 package ephemeraldisk
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -42,15 +41,10 @@ var _ = Describe("ContainerDisk", func() {
 	var blockDevBaseDir string
 	var creator *ephemeralDiskCreator
 
-	createBackingImageForPVC := func(volumeName string, isBlock bool) error {
-		if err := os.Mkdir(filepath.Join(pvcBaseTempDirPath, volumeName), 0755); err != nil {
-			return err
-		}
-		f, err := os.Create(creator.getBackingFilePath(volumeName, isBlock))
-		if err != nil {
-			return err
-		}
-		return f.Close()
+	createBackingImageForPVC := func(volumeName string, isBlock bool) {
+		os.Mkdir(filepath.Join(pvcBaseTempDirPath, volumeName), 0755)
+		f, _ := os.Create(creator.getBackingFilePath(volumeName, isBlock))
+		f.Close()
 	}
 
 	AppendEphemeralPVC := func(vmi *v1.VirtualMachineInstance, diskName string, claimName string, backingDiskIsblock bool) {
@@ -72,7 +66,7 @@ var _ = Describe("ContainerDisk", func() {
 		})
 
 		By("Creating a backing image for the PVC")
-		Expect(createBackingImageForPVC(diskName, backingDiskIsblock)).To(Succeed())
+		createBackingImageForPVC(diskName, backingDiskIsblock)
 
 		// Test the test infra itself: make sure that the backing file has been created.
 		var err error
@@ -189,13 +183,10 @@ func fakeCreateBackingDisk(backingFile string, backingFormat string, imagePath s
 		return nil, fmt.Errorf("wrong backing format")
 	}
 	_, err := os.Stat(backingFile)
-	if errors.Is(err, os.ErrNotExist) {
+	if os.IsNotExist(err) {
 		return nil, err
 	}
-	f, err := os.Create(imagePath)
-	if err != nil {
-		return nil, err
-	}
-	err = f.Close()
-	return nil, err
+	f, _ := os.Create(imagePath)
+	f.Close()
+	return nil, nil
 }

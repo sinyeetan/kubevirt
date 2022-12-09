@@ -20,6 +20,7 @@
 package hotplugdisk
 
 import (
+	"io/ioutil"
 	"os"
 	"path/filepath"
 
@@ -41,7 +42,7 @@ var _ = Describe("HotplugDisk", func() {
 
 	BeforeEach(func() {
 		// Create some directories and files in temporary location.
-		tempDir, err = os.MkdirTemp("/tmp", "hp-disk-test")
+		tempDir, err = ioutil.TempDir("/tmp", "hp-disk-test")
 		Expect(err).ToNot(HaveOccurred())
 		podsBaseDir = filepath.Join(tempDir, "podsBaseDir")
 		err = os.MkdirAll(filepath.Join(podsBaseDir), os.FileMode(0755))
@@ -55,7 +56,7 @@ var _ = Describe("HotplugDisk", func() {
 
 	AfterEach(func() {
 		if tempDir != "" {
-			Expect(os.RemoveAll(tempDir)).To(Succeed())
+			os.RemoveAll(tempDir)
 		}
 	})
 

@@ -46,20 +46,13 @@ const (
 	DownwardMetricsFeatureGate = "DownwardMetrics"
 	NonRootDeprecated          = "NonRootExperimental"
 	NonRoot                    = "NonRoot"
-	Root                       = "Root"
 	ClusterProfiler            = "ClusterProfiler"
 	WorkloadEncryptionSEV      = "WorkloadEncryptionSEV"
-	// DockerSELinuxMCSWorkaround sets the SELinux level of all the non-compute virt-launcher containers to "s0".
-	DockerSELinuxMCSWorkaround = "DockerSELinuxMCSWorkaround"
-	PSA                        = "PSA"
-	VSOCKGate                  = "VSOCK"
 )
 
 var deprecatedFeatureGates = [...]string{
 	LiveMigrationGate,
 	SRIOVLiveMigrationGate,
-	NonRoot,
-	NonRootDeprecated,
 }
 
 func (c *ClusterConfig) isFeatureGateEnabled(featureGate string) bool {
@@ -163,8 +156,8 @@ func (config *ClusterConfig) HostDevicesPassthroughEnabled() bool {
 	return config.isFeatureGateEnabled(HostDevicesGate)
 }
 
-func (config *ClusterConfig) RootEnabled() bool {
-	return config.isFeatureGateEnabled(Root)
+func (config *ClusterConfig) NonRootEnabled() bool {
+	return config.isFeatureGateEnabled(NonRoot) || config.isFeatureGateEnabled(NonRootDeprecated)
 }
 
 func (config *ClusterConfig) ClusterProfilerEnabled() bool {
@@ -173,16 +166,4 @@ func (config *ClusterConfig) ClusterProfilerEnabled() bool {
 
 func (config *ClusterConfig) WorkloadEncryptionSEVEnabled() bool {
 	return config.isFeatureGateEnabled(WorkloadEncryptionSEV)
-}
-
-func (config *ClusterConfig) DockerSELinuxMCSWorkaroundEnabled() bool {
-	return config.isFeatureGateEnabled(DockerSELinuxMCSWorkaround)
-}
-
-func (config *ClusterConfig) PSAEnabled() bool {
-	return config.isFeatureGateEnabled(PSA)
-}
-
-func (config *ClusterConfig) VSOCKEnabled() bool {
-	return config.isFeatureGateEnabled(VSOCKGate)
 }

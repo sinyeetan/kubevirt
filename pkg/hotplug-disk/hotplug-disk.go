@@ -20,7 +20,6 @@
 package hotplugdisk
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,9 +50,9 @@ type HotplugDiskManagerInterface interface {
 	GetFileSystemDirectoryTargetPathFromHostView(virtlauncherPodUID types.UID, volumeName string, create bool) (*safepath.Path, error)
 }
 
-func NewHotplugDiskManager(kubeletPodsDir string) *hotplugDiskManager {
+func NewHotplugDiskManager() *hotplugDiskManager {
 	return &hotplugDiskManager{
-		podsBaseDir:       filepath.Join(util.HostRootMount, kubeletPodsDir),
+		podsBaseDir:       filepath.Join(util.HostRootMount, util.KubeletPodsDir),
 		targetPodBasePath: TargetPodBasePath,
 	}
 }
@@ -83,7 +82,7 @@ func (h *hotplugDiskManager) GetFileSystemDirectoryTargetPathFromHostView(virtla
 		return nil, err
 	}
 	_, err = safepath.JoinNoFollow(targetPath, volumeName)
-	if errors.Is(err, os.ErrNotExist) && create {
+	if os.IsNotExist(err) && create {
 		if err := safepath.MkdirAtNoFollow(targetPath, volumeName, 0750); err != nil {
 			return nil, err
 		}

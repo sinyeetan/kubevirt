@@ -26,8 +26,6 @@ package virtconfig
 import (
 	"fmt"
 
-	"kubevirt.io/client-go/log"
-
 	k8sv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
@@ -62,13 +60,13 @@ const (
 	SmbiosConfigDefaultManufacturer                 = "KubeVirt"
 	SmbiosConfigDefaultProduct                      = "None"
 	DefaultPermitBridgeInterfaceOnPodNetwork        = true
-	DefaultSELinuxLauncherType                      = ""
+	DefaultSELinuxLauncherType                      = "virt_launcher.process"
 	SupportedGuestAgentVersions                     = "2.*,3.*,4.*,5.*"
 	DefaultARCHOVMFPath                             = "/usr/share/OVMF"
 	DefaultAARCH64OVMFPath                          = "/usr/share/AAVMF"
 	DefaultMemBalloonStatsPeriod             uint32 = 10
 	DefaultCPUAllocationRatio                       = 10
-	DefaultDiskVerificationMemoryLimitMBytes        = 1700
+	DefaultDiskVerificationMemoryLimitMBytes        = 1500
 	DefaultVirtAPILogVerbosity                      = 2
 	DefaultVirtControllerLogVerbosity               = 2
 	DefaultVirtHandlerLogVerbosity                  = 2
@@ -240,6 +238,8 @@ func (c *ClusterConfig) GetMinimumClusterTSCFrequency() *int64 {
 }
 
 func (c *ClusterConfig) GetPermittedHostDevices() *v1.PermittedHostDevices {
+	fmt.Println("=========================virt-config getpermitted========================")
+	fmt.Println(c.GetConfig().APIConfiguration)
 	return c.GetConfig().PermittedHostDevices
 }
 
@@ -263,12 +263,7 @@ func (c *ClusterConfig) GetDesiredMDEVTypes(node *k8sv1.Node) []string {
 		mdevTypesMap := make(map[string]struct{})
 		for _, nodeConfig := range nodeMdevConf {
 			if canSelectNode(nodeConfig.NodeSelector, node) {
-				types := nodeConfig.MediatedDeviceTypes
-				// Handle deprecated spelling
-				if len(types) == 0 {
-					types = nodeConfig.MediatedDevicesTypes
-				}
-				for _, mdevType := range types {
+				for _, mdevType := range nodeConfig.MediatedDevicesTypes {
 					mdevTypesMap[mdevType] = struct{}{}
 				}
 			}
@@ -281,81 +276,49 @@ func (c *ClusterConfig) GetDesiredMDEVTypes(node *k8sv1.Node) []string {
 			return mdevTypesList
 		}
 	}
-	// Handle deprecated spelling
-	if len(mdevTypesConf.MediatedDeviceTypes) == 0 {
-		return mdevTypesConf.MediatedDevicesTypes
-	}
-	return mdevTypesConf.MediatedDeviceTypes
-}
-
-type virtComponent int
-
-const (
-	virtHandler virtComponent = iota
-	virtApi
-	virtController
-	virtOperator
-	virtLauncher
-)
-
-// Gets the component verbosity. nodeName can be empty, then it's ignored.
-func (c *ClusterConfig) getComponentVerbosity(component virtComponent, nodeName string) uint {
-	logConf := c.GetConfig().DeveloperConfiguration.LogVerbosity
-
-	if nodeName != "" {
-		if level := logConf.NodeVerbosity[nodeName]; level != 0 {
-			return level
-		}
-	}
-
-	switch component {
-	case virtHandler:
-		return logConf.VirtHandler
-	case virtApi:
-		return logConf.VirtAPI
-	case virtController:
-		return logConf.VirtController
-	case virtOperator:
-		return logConf.VirtOperator
-	case virtLauncher:
-		return logConf.VirtLauncher
-	default:
-		log.Log.Errorf("getComponentVerbosity called with an unknown virtComponent: %v", component)
-		return 0
-	}
+	return mdevTypesConf.MediatedDevicesTypes
 }
 
 func (c *ClusterConfig) GetVirtHandlerVerbosity(nodeName string) uint {
-	return c.getComponentVerbosity(virtHandler, nodeName)
+	logConf := c.GetConfig().DeveloperConfiguration.LogVerbosity
+	if level := logConf.NodeVerbosity[nodeName]; level != 0 {
+		return level
+	}
+	return logConf.VirtHandler
 }
 
 func (c *ClusterConfig) GetVirtAPIVerbosity(nodeName string) uint {
-	return c.getComponentVerbosity(virtApi, nodeName)
+	logConf := c.GetConfig().DeveloperConfiguration.LogVerbosity
+	if level := logConf.NodeVerbosity[nodeName]; level != 0 {
+		return level
+	}
+	return logConf.VirtAPI
 }
 
 func (c *ClusterConfig) GetVirtControllerVerbosity(nodeName string) uint {
-	return c.getComponentVerbosity(virtController, nodeName)
-}
-
-func (c *ClusterConfig) GetVirtOperatorVerbosity(nodeName string) uint {
-	return c.getComponentVerbosity(virtOperator, nodeName)
+	logConf := c.GetConfig().DeveloperConfiguration.LogVerbosity
+	if level := logConf.NodeVerbosity[nodeName]; level != 0 {
+		return level
+	}
+	return logConf.VirtController
 }
 
 func (c *ClusterConfig) GetVirtLauncherVerbosity() uint {
-	return c.getComponentVerbosity(virtLauncher, "")
+	logConf := c.GetConfig().DeveloperConfiguration.LogVerbosity
+	return logConf.VirtLauncher
 }
 
-// GetMinCPUModel return minimal cpu which is used in node-labeller
+//GetMinCPUModel return minimal cpu which is used in node-labeller
 func (c *ClusterConfig) GetMinCPUModel() string {
 	return c.GetConfig().MinCPUModel
 }
 
-// GetObsoleteCPUModels return slice of obsolete cpus which are used in node-labeller
+//GetObsoleteCPUModels return slice of obsolete cpus which are used in node-labeller
 func (c *ClusterConfig) GetObsoleteCPUModels() map[string]bool {
 	return c.GetConfig().ObsoleteCPUModels
 }
 
-// GetClusterCPUArch return the CPU architecture in ClusterConfig
+//GetClusterCPUArch return the CPU architecture in ClusterConfig
 func (c *ClusterConfig) GetClusterCPUArch() string {
 	return c.cpuArch
 }

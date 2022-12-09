@@ -257,6 +257,7 @@ func (c *ClusterConfig) SetConfigModifiedCallback(cb ConfigModifiedFn) {
 }
 
 func setConfigFromKubeVirt(config *v1.KubeVirtConfiguration, kv *v1.KubeVirt) error {
+	log.Log.Infof("====================virt-config/configuration.go setCOnfigfromkubevirt===========")
 	kvConfig := &kv.Spec.Configuration
 	overrides, err := json.Marshal(kvConfig)
 	if err != nil {
@@ -294,9 +295,11 @@ func getCPUArchSpecificDefault(cpuArch string) (string, string, []string) {
 func (c *ClusterConfig) GetConfig() (config *v1.KubeVirtConfiguration) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
+	log.Log.Infof("=======================virt-config/configuration.go getCOnfig================")
 
 	kv := c.GetConfigFromKubeVirtCR()
 	if kv == nil {
+		log.Log.Infof("=======================get config from CR================")
 		return c.lastValidConfig
 	}
 
@@ -306,6 +309,7 @@ func (c *ClusterConfig) GetConfig() (config *v1.KubeVirtConfiguration) {
 	// and ignore configuration in kubevirt
 	if c.lastValidConfigResourceVersion == resourceVersion ||
 		c.lastInvalidConfigResourceVersion == resourceVersion {
+		log.Log.Infof("=======================ignore config in kubevirt================")
 		return c.lastValidConfig
 	}
 
@@ -320,6 +324,7 @@ func (c *ClusterConfig) GetConfig() (config *v1.KubeVirtConfiguration) {
 	log.DefaultLogger().Infof("Updating cluster config from KubeVirt to resource version '%s'", resourceVersion)
 	c.lastValidConfigResourceVersion = resourceVersion
 	c.lastValidConfig = config
+	log.Log.Infof("=======================last valid config================")
 	return c.lastValidConfig
 }
 

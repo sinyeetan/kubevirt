@@ -27,23 +27,30 @@ import (
 	"net/url"
 	"time"
 
+	clonev1alpha1 "kubevirt.io/api/clone/v1alpha1"
+
+	"kubevirt.io/kubevirt/pkg/virt-controller/watch/clone"
+
+	migrationsv1 "kubevirt.io/api/migrations/v1alpha1"
+
+	restful "github.com/emicklei/go-restful"
 	"github.com/golang/mock/gomock"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"k8s.io/client-go/tools/cache"
 
-	restful "github.com/emicklei/go-restful"
-	io_prometheus_client "github.com/prometheus/client_model/go"
+	"kubevirt.io/kubevirt/pkg/virt-controller/watch/topology"
+
 	appsv1 "k8s.io/api/apps/v1"
+	k8sv1 "k8s.io/api/core/v1"
 	kubev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
-	storagev1 "k8s.io/api/storage/v1"
-	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
-	clonev1alpha1 "kubevirt.io/api/clone/v1alpha1"
+
+	io_prometheus_client "github.com/prometheus/client_model/go"
+
 	v1 "kubevirt.io/api/core/v1"
 	exportv1 "kubevirt.io/api/export/v1alpha1"
-	migrationsv1 "kubevirt.io/api/migrations/v1alpha1"
 	snapshotv1 "kubevirt.io/api/snapshot/v1alpha1"
 	"kubevirt.io/client-go/kubecli"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
@@ -54,10 +61,11 @@ import (
 	"kubevirt.io/kubevirt/pkg/storage/snapshot"
 	testutils "kubevirt.io/kubevirt/pkg/testutils"
 	"kubevirt.io/kubevirt/pkg/virt-controller/services"
-	"kubevirt.io/kubevirt/pkg/virt-controller/watch/clone"
 	"kubevirt.io/kubevirt/pkg/virt-controller/watch/drain/disruptionbudget"
 	"kubevirt.io/kubevirt/pkg/virt-controller/watch/drain/evacuation"
-	"kubevirt.io/kubevirt/pkg/virt-controller/watch/topology"
+
+	storagev1 "k8s.io/api/storage/v1"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
 func newValidGetRequest() *http.Request {
@@ -77,7 +85,6 @@ var _ = Describe("Application", func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		kvInformer, _ := testutils.NewFakeInformerFor(&v1.KubeVirt{})
 		vmInformer, _ := testutils.NewFakeInformerFor(&v1.VirtualMachine{})
 		vmiInformer, _ := testutils.NewFakeInformerFor(&v1.VirtualMachineInstance{})
 		vmSnapshotInformer, _ := testutils.NewFakeInformerFor(&snapshotv1.VirtualMachineSnapshot{})
@@ -90,8 +97,8 @@ var _ = Describe("Application", func() {
 
 		pdbInformer, _ := testutils.NewFakeInformerFor(&policyv1.PodDisruptionBudget{})
 		migrationPolicyInformer, _ := testutils.NewFakeInformerFor(&migrationsv1.MigrationPolicy{})
-		podInformer, _ := testutils.NewFakeInformerFor(&kubev1.Pod{})
-		pvcInformer, _ := testutils.NewFakeInformerFor(&kubev1.PersistentVolumeClaim{})
+		podInformer, _ := testutils.NewFakeInformerFor(&k8sv1.Pod{})
+		pvcInformer, _ := testutils.NewFakeInformerFor(&k8sv1.PersistentVolumeClaim{})
 		crInformer, _ := testutils.NewFakeInformerFor(&appsv1.ControllerRevision{})
 		dataVolumeInformer, _ := testutils.NewFakeInformerFor(&cdiv1.DataVolume{})
 		cdiInformer, _ := testutils.NewFakeInformerFor(&cdiv1.DataVolume{})
@@ -105,9 +112,9 @@ var _ = Describe("Application", func() {
 		routeConfigMapInformer, _ := testutils.NewFakeInformerFor(&kubev1.ConfigMap{})
 		dvInformer, _ := testutils.NewFakeInformerFor(&cdiv1.DataVolume{})
 		instancetypeMethods := testutils.NewMockInstancetypeMethods()
-		exportServiceInformer, _ := testutils.NewFakeInformerFor(&kubev1.Service{})
+		exportServiceInformer, _ := testutils.NewFakeInformerFor(&k8sv1.Service{})
 		cloneInformer, _ := testutils.NewFakeInformerFor(&clonev1alpha1.VirtualMachineClone{})
-		secretInformer, _ := testutils.NewFakeInformerFor(&kubev1.Secret{})
+		secretInformer, _ := testutils.NewFakeInformerFor(&k8sv1.Secret{})
 
 		var qemuGid int64 = 107
 
@@ -129,8 +136,6 @@ var _ = Describe("Application", func() {
 			cdiConfigInformer,
 			config,
 			topology.NewTopologyHinter(&cache.FakeCustomStore{}, &cache.FakeCustomStore{}, "amd64", nil),
-			nil,
-			false,
 		)
 		app.rsController = NewVMIReplicaSet(vmiInformer, rsInformer, recorder, virtClient, uint(10))
 		app.vmController = NewVMController(vmiInformer,
@@ -153,8 +158,6 @@ var _ = Describe("Application", func() {
 			recorder,
 			virtClient,
 			config,
-			nil,
-			false,
 		)
 		app.snapshotController = &snapshot.VMSnapshotController{
 			Client:                    virtClient,
@@ -200,8 +203,6 @@ var _ = Describe("Application", func() {
 			VMSnapshotContentInformer: vmSnapshotContentInformer,
 			VMInformer:                vmInformer,
 			VMIInformer:               vmiInformer,
-			CRDInformer:               crdInformer,
-			KubeVirtInformer:          kvInformer,
 		}
 		app.exportController.Init()
 		app.persistentVolumeClaimInformer = pvcInformer
@@ -212,7 +213,6 @@ var _ = Describe("Application", func() {
 			vmSnapshotInformer,
 			vmRestoreInformer,
 			vmInformer,
-			vmSnapshotContentInformer,
 			recorder,
 		)
 
