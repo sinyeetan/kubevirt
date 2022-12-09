@@ -37,8 +37,6 @@ const (
 	DefaultCPUModel                        = CPUModeHostModel
 )
 
-const HotplugDiskDir = "/var/run/kubevirt/hotplug-disks/"
-
 /*
  ATTENTION: Rerun code generators when comments on structs or fields are modified.
 */
@@ -431,9 +429,6 @@ type Devices struct {
 	// Defaults to false.
 	// +optional
 	AutoattachInputDevice *bool `json:"autoattachInputDevice,omitempty"`
-	// Whether to attach the VSOCK CID to the VM or not.
-	// VSOCK access will be available if set to true. Defaults to false.
-	AutoattachVSOCK *bool `json:"autoattachVSOCK,omitempty"`
 	// Whether to have random number generator from host
 	// +optional
 	Rng *Rng `json:"rng,omitempty"`
@@ -455,6 +450,10 @@ type Devices struct {
 	//Whether to attach a host device to the vmi.
 	// +optional
 	// +listType=atomic
+
+	//flagXY
+	USBDevices []HostDevice `json:"usbDevices,omitempty"`
+
 	HostDevices []HostDevice `json:"hostDevices,omitempty"`
 	// To configure and access client devices such as redirecting USB
 	// +optional
@@ -631,7 +630,7 @@ type DiskBus string
 const (
 	DiskBusSCSI   DiskBus = "scsi"
 	DiskBusSATA   DiskBus = "sata"
-	DiskBusVirtio DiskBus = VirtIO
+	DiskBusVirtio DiskBus = "virtio"
 	DiskBusUSB    DiskBus = "usb"
 )
 
@@ -777,8 +776,7 @@ type HotplugVolumeSource struct {
 }
 
 type DataVolumeSource struct {
-	// Name of both the DataVolume and the PVC in the same namespace.
-	// After PVC population the DataVolume is garbage collected by default.
+	// Name represents the name of the DataVolume in the same namespace
 	Name string `json:"name"`
 	// Hotpluggable indicates whether the volume can be hotplugged and hotunplugged.
 	// +optional
@@ -861,7 +859,7 @@ type Clock struct {
 	ClockOffset `json:",inline"`
 	// Timer specifies whih timers are attached to the vmi.
 	// +optional
-	Timer *Timer `json:"timer,omitempty"`
+	Timer *Timer `json:"timer"`
 }
 
 // Represents all available timers in a vmi.

@@ -21,6 +21,7 @@ package kubecli
 
 import (
 	"context"
+
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -131,7 +132,7 @@ func roundTripperFromConfig(config *rest.Config, callback RoundTripCallback) (ht
 	return rest.HTTPWrappersForConfig(config, rt)
 }
 
-func RequestFromConfig(config *rest.Config, resource, name, namespace, subresource string, queryParams url.Values) (*http.Request, error) {
+func RequestFromConfig(config *rest.Config, resource, name, namespace, subresource string) (*http.Request, error) {
 
 	u, err := url.Parse(config.Host)
 	if err != nil {
@@ -151,9 +152,6 @@ func RequestFromConfig(config *rest.Config, resource, name, namespace, subresour
 		u.Path,
 		fmt.Sprintf("/apis/subresources.kubevirt.io/%s/namespaces/%s/%s/%s/%s", v1.ApiStorageVersion, namespace, resource, name, subresource),
 	)
-	if len(queryParams) > 0 {
-		u.RawQuery = queryParams.Encode()
-	}
 	req := &http.Request{
 		Method: http.MethodGet,
 		URL:    u,
@@ -164,15 +162,24 @@ func RequestFromConfig(config *rest.Config, resource, name, namespace, subresour
 }
 
 func (v *vmis) USBRedir(name string) (StreamInterface, error) {
-	return asyncSubresourceHelper(v.config, v.resource, v.namespace, name, "usbredir", url.Values{})
+	return asyncSubresourceHelper(v.config, v.resource, v.namespace, name, "usbredir")
 }
 
 func (v *vmis) VNC(name string) (StreamInterface, error) {
-	return asyncSubresourceHelper(v.config, v.resource, v.namespace, name, "vnc", url.Values{})
+	return asyncSubresourceHelper(v.config, v.resource, v.namespace, name, "vnc")
 }
 
 func (v *vmis) PortForward(name string, port int, protocol string) (StreamInterface, error) {
-	return asyncSubresourceHelper(v.config, v.resource, v.namespace, name, buildPortForwardResourcePath(port, protocol), url.Values{})
+	return asyncSubresourceHelper(v.config, v.resource, v.namespace, name, buildPortForwardResourcePath(port, protocol))
+}
+
+// Compute URI based on host path
+func (v *vmis) adaptUriForHostPath(uri string) string {
+	u, err := url.Parse(v.config.Host)
+	if err != nil {
+		return uri
+	}
+	return path.Join(u.Path, uri)
 }
 
 func buildPortForwardResourcePath(port int, protocol string) string {
@@ -216,7 +223,7 @@ func (v *vmis) SerialConsole(name string, options *SerialConsoleOptions) (Stream
 				default:
 				}
 
-				con, err := asyncSubresourceHelper(v.config, v.resource, v.namespace, name, "console", url.Values{})
+				con, err := asyncSubresourceHelper(v.config, v.resource, v.namespace, name, "console")
 				if err != nil {
 					asyncSubresourceError, ok := err.(*AsyncSubresourceError)
 					// return if response status code does not equal to 400
@@ -236,7 +243,7 @@ func (v *vmis) SerialConsole(name string, options *SerialConsoleOptions) (Stream
 		conStruct := <-connectionChan
 		return conStruct.con, conStruct.err
 	} else {
-		return asyncSubresourceHelper(v.config, v.resource, v.namespace, name, "console", url.Values{})
+		return asyncSubresourceHelper(v.config, v.resource, v.namespace, name, "console")
 	}
 }
 
@@ -255,19 +262,19 @@ func (v *vmis) Freeze(name string, unfreezeTimeout time.Duration) error {
 		return err
 	}
 
-	return v.restClient.Put().AbsPath(uri).Body([]byte(JSON)).Do(context.Background()).Error()
+	return v.restClient.Put().RequestURI(v.adaptUriForHostPath(uri)).Body([]byte(JSON)).Do(context.Background()).Error()
 }
 
 func (v *vmis) Unfreeze(name string) error {
 	log.Log.Infof("Unfreeze VMI %s", name)
 	uri := fmt.Sprintf(vmiSubresourceURL, v1.ApiStorageVersion, v.namespace, name, "unfreeze")
-	return v.restClient.Put().AbsPath(uri).Do(context.Background()).Error()
+	return v.restClient.Put().RequestURI(v.adaptUriForHostPath(uri)).Do(context.Background()).Error()
 }
 
 func (v *vmis) SoftReboot(name string) error {
 	log.Log.Infof("SoftReboot VMI")
 	uri := fmt.Sprintf(vmiSubresourceURL, v1.ApiStorageVersion, v.namespace, name, "softreboot")
-	return v.restClient.Put().AbsPath(uri).Do(context.Background()).Error()
+	return v.restClient.Put().RequestURI(v.adaptUriForHostPath(uri)).Do(context.Background()).Error()
 }
 
 func (v *vmis) Pause(name string, pauseOptions *v1.PauseOptions) error {
@@ -276,7 +283,7 @@ func (v *vmis) Pause(name string, pauseOptions *v1.PauseOptions) error {
 		return fmt.Errorf("Cannot Marshal to json: %s", err)
 	}
 	uri := fmt.Sprintf(vmiSubresourceURL, v1.ApiStorageVersion, v.namespace, name, "pause")
-	return v.restClient.Put().AbsPath(uri).Body(body).Do(context.Background()).Error()
+	return v.restClient.Put().RequestURI(v.adaptUriForHostPath(uri)).Body(body).Do(context.Background()).Error()
 }
 
 func (v *vmis) Unpause(name string, unpauseOptions *v1.UnpauseOptions) error {
@@ -285,7 +292,7 @@ func (v *vmis) Unpause(name string, unpauseOptions *v1.UnpauseOptions) error {
 		return fmt.Errorf("Cannot Marshal to json: %s", err)
 	}
 	uri := fmt.Sprintf(vmiSubresourceURL, v1.ApiStorageVersion, v.namespace, name, "unpause")
-	return v.restClient.Put().AbsPath(uri).Body(body).Do(context.Background()).Error()
+	return v.restClient.Put().RequestURI(v.adaptUriForHostPath(uri)).Body(body).Do(context.Background()).Error()
 }
 
 func (v *vmis) Get(name string, options *k8smetav1.GetOptions) (vmi *v1.VirtualMachineInstance, err error) {
@@ -425,7 +432,7 @@ func (v *vmis) GuestOsInfo(name string) (v1.VirtualMachineInstanceGuestAgentInfo
 	// this issue should be solved.
 	// This workaround can go away once the least supported k8s version is the working one.
 	// The issue has been described in: https://github.com/kubevirt/kubevirt/issues/3059
-	res := v.restClient.Get().AbsPath(uri).Do(context.Background())
+	res := v.restClient.Get().RequestURI(v.adaptUriForHostPath(uri)).Do(context.Background())
 	rawInfo, err := res.Raw()
 	if err != nil {
 		log.Log.Errorf("Cannot retrieve GuestOSInfo: %s", err.Error())
@@ -443,30 +450,15 @@ func (v *vmis) GuestOsInfo(name string) (v1.VirtualMachineInstanceGuestAgentInfo
 func (v *vmis) UserList(name string) (v1.VirtualMachineInstanceGuestOSUserList, error) {
 	userList := v1.VirtualMachineInstanceGuestOSUserList{}
 	uri := fmt.Sprintf(vmiSubresourceURL, v1.ApiStorageVersion, v.namespace, name, "userlist")
-	err := v.restClient.Get().AbsPath(uri).Do(context.Background()).Into(&userList)
+	err := v.restClient.Get().RequestURI(v.adaptUriForHostPath(uri)).Do(context.Background()).Into(&userList)
 	return userList, err
 }
 
 func (v *vmis) FilesystemList(name string) (v1.VirtualMachineInstanceFileSystemList, error) {
 	fsList := v1.VirtualMachineInstanceFileSystemList{}
 	uri := fmt.Sprintf(vmiSubresourceURL, v1.ApiStorageVersion, v.namespace, name, "filesystemlist")
-	err := v.restClient.Get().AbsPath(uri).Do(context.Background()).Into(&fsList)
+	err := v.restClient.Get().RequestURI(v.adaptUriForHostPath(uri)).Do(context.Background()).Into(&fsList)
 	return fsList, err
-}
-
-func (v *vmis) Screenshot(name string, screenshotOptions *v1.ScreenshotOptions) ([]byte, error) {
-	moveCursor := "false"
-	if screenshotOptions.MoveCursor == true {
-		moveCursor = "true"
-	}
-
-	uri := fmt.Sprintf(vmiSubresourceURL, v1.ApiStorageVersion, v.namespace, name, "vnc/screenshot")
-	res := v.restClient.Get().AbsPath(uri).Param("moveCursor", moveCursor).Do(context.Background())
-	raw, err := res.Raw()
-	if err != nil {
-		return nil, res.Error()
-	}
-	return raw, nil
 }
 
 func (v *vmis) AddVolume(name string, addVolumeOptions *v1.AddVolumeOptions) error {
@@ -478,7 +470,7 @@ func (v *vmis) AddVolume(name string, addVolumeOptions *v1.AddVolumeOptions) err
 		return err
 	}
 
-	return v.restClient.Put().AbsPath(uri).Body([]byte(JSON)).Do(context.Background()).Error()
+	return v.restClient.Put().RequestURI(v.adaptUriForHostPath(uri)).Body([]byte(JSON)).Do(context.Background()).Error()
 }
 
 func (v *vmis) RemoveVolume(name string, removeVolumeOptions *v1.RemoveVolumeOptions) error {
@@ -490,14 +482,5 @@ func (v *vmis) RemoveVolume(name string, removeVolumeOptions *v1.RemoveVolumeOpt
 		return err
 	}
 
-	return v.restClient.Put().AbsPath(uri).Body([]byte(JSON)).Do(context.Background()).Error()
-}
-
-func (v *vmis) VSOCK(name string, options *v1.VSOCKOptions) (StreamInterface, error) {
-	if options == nil || options.TargetPort == 0 {
-		return nil, fmt.Errorf("target port is required but not provided")
-	}
-	queryParams := url.Values{}
-	queryParams.Add("port", strconv.FormatUint(uint64(options.TargetPort), 10))
-	return asyncSubresourceHelper(v.config, v.resource, v.namespace, name, "vsock", queryParams)
+	return v.restClient.Put().RequestURI(v.adaptUriForHostPath(uri)).Body([]byte(JSON)).Do(context.Background()).Error()
 }

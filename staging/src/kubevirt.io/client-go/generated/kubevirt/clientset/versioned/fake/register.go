@@ -27,7 +27,6 @@ import (
 	clonev1alpha1 "kubevirt.io/api/clone/v1alpha1"
 	exportv1alpha1 "kubevirt.io/api/export/v1alpha1"
 	instancetypev1alpha1 "kubevirt.io/api/instancetype/v1alpha1"
-	instancetypev1alpha2 "kubevirt.io/api/instancetype/v1alpha2"
 	migrationsv1alpha1 "kubevirt.io/api/migrations/v1alpha1"
 	poolv1alpha1 "kubevirt.io/api/pool/v1alpha1"
 	snapshotv1alpha1 "kubevirt.io/api/snapshot/v1alpha1"
@@ -40,7 +39,6 @@ var localSchemeBuilder = runtime.SchemeBuilder{
 	clonev1alpha1.AddToScheme,
 	exportv1alpha1.AddToScheme,
 	instancetypev1alpha1.AddToScheme,
-	instancetypev1alpha2.AddToScheme,
 	migrationsv1alpha1.AddToScheme,
 	poolv1alpha1.AddToScheme,
 	snapshotv1alpha1.AddToScheme,
@@ -49,14 +47,14 @@ var localSchemeBuilder = runtime.SchemeBuilder{
 // AddToScheme adds all types of this clientset into the given scheme. This allows composition
 // of clientsets, like in:
 //
-//	import (
-//	  "k8s.io/client-go/kubernetes"
-//	  clientsetscheme "k8s.io/client-go/kubernetes/scheme"
-//	  aggregatorclientsetscheme "k8s.io/kube-aggregator/pkg/client/clientset_generated/clientset/scheme"
-//	)
+//   import (
+//     "k8s.io/client-go/kubernetes"
+//     clientsetscheme "k8s.io/client-go/kubernetes/scheme"
+//     aggregatorclientsetscheme "k8s.io/kube-aggregator/pkg/client/clientset_generated/clientset/scheme"
+//   )
 //
-//	kclientset, _ := kubernetes.NewForConfig(c)
-//	_ = aggregatorclientsetscheme.AddToScheme(clientsetscheme.Scheme)
+//   kclientset, _ := kubernetes.NewForConfig(c)
+//   _ = aggregatorclientsetscheme.AddToScheme(clientsetscheme.Scheme)
 //
 // After this, RawExtensions in Kubernetes types will serialize kube-aggregator types
 // correctly.
